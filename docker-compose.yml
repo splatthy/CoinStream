@@ -1,0 +1,39 @@
+services:
+  trading-journal:
+    build: .
+    container_name: crypto-trading-journal
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data
+      - ./app:/app/app  # Mount for development hot-reload
+    environment:
+      - PYTHONPATH=/app
+      - STREAMLIT_SERVER_PORT=8501
+      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
+      - DATA_PATH=/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Optional: Add a development service with hot-reload
+  trading-journal-dev:
+    build: .
+    container_name: crypto-trading-journal-dev
+    ports:
+      - "8502:8501"
+    volumes:
+      - ./data:/app/data
+      - ./app:/app/app
+    environment:
+      - PYTHONPATH=/app
+      - STREAMLIT_SERVER_PORT=8501
+      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
+      - DATA_PATH=/app/data
+    command: ["streamlit", "run", "app/main.py", "--server.port=8501", "--server.address=0.0.0.0", "--server.runOnSave=true"]
+    profiles:
+      - dev
