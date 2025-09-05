@@ -1,9 +1,424 @@
-# Streamlit entry point - placeholder for now
-import streamlit as st
+"""
+Main Streamlit application entry point with navigation and session state management.
+"""
 
-def main():
-    st.title("Crypto Trading Journal")
-    st.write("Application starting...")
+import streamlit as st
+import os
+from typing import Dict, Any, Optional
+from datetime import datetime, timedelta
+
+from app.services.config_service import ConfigService
+from app.services.data_service import DataService
+from app.services.analysis_service import AnalysisService
+from app.utils.state_management import (
+    get_state_manager, get_loading_manager, with_loading_state
+)
+from app.utils.notifications import (
+    get_notification_manager, render_notifications
+)
+from app.utils.data_refresh import (
+    get_data_refresh_manager, register_refresh_operation
+)
+from app.utils.sync_ui import get_sync_ui_manager
+from app.utils.logging_config import setup_application_logging, get_logger
+from app.utils.error_handler import handle_exceptions, error_handler
+from app.utils.debug_utils import error_reporter
+
+
+# Initialize logging system
+data_path = os.getenv("DATA_PATH", "/app/data")
+setup_application_logging(data_path=data_path)
+logger = get_logger(__name__)
+
+
+class AppState:
+    """Manages application state and session data."""
+    
+    def __init__(self):
+        """Initialize application state."""
+        self.config_service: Optional[ConfigService] = None
+        self.data_service: Optional[DataService] = None
+        self.analysis_service: Optional[AnalysisService] = None
+        self.last_refresh: Optional[datetime] = None
+        self.initialization_error: Optional[str] = None
+        
+        # Get state and notification managers
+        self.state_manager = get_state_manager()
+        self.loading_manager = get_loading_manager()
+        self.notification_manager = get_notification_manager()
+        self.data_refresh_manager = get_data_refresh_manager()
+    
+    @handle_exceptions(context="Service Initialization", show_to_user=True)
+    def initialize_services(self, data_path: str = "/app/data") -> None:
+        """Initialize all application services."""
+        try:
+            self.loading_manager.set_loading("initialization", True, "Initializing application services...")
+            
+            self.config_service = ConfigService(data_path)
+            self.data_service = DataService(data_path)
+            self.analysis_service = AnalysisService(self.data_service)
+            
+            # Initialize default configuration if needed
+            self.config_service.initialize_default_config()
+            
+            # Cache services in state manager
+            self.state_manager.set("config_service", self.config_service)
+            self.state_manager.set("data_service", self.data_service)
+            self.state_manager.set("analysis_service", self.analysis_service)
+            
+            # Register data refresh operations
+            self._register_refresh_operations()
+            
+            logger.info("Application services initialized successfully")
+            self.notification_manager.success("Application initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize services: {e}")
+            self.initialization_error = str(e)
+            self.notification_manager.error(f"Failed to initialize application: {e}")
+            # Generate error report for initialization failures
+            error_reporter.save_error_report(e, "Service Initialization")
+            raise
+        finally:
+            self.loading_manager.clear_loading("initialization")
+    
+    @with_loading_state("data_refresh", "Refreshing data...")
+    @handle_exceptions(context="Data Refresh", show_to_user=True)
+    def refresh_data(self) -> None:
+        """Refresh application data."""
+        try:
+            # Clear data service cache to force reload
+            if self.data_service:
+                self.data_service.clear_cache()
+            
+            # Clear state manager cache
+            self.state_manager.clear_cache()
+            
+            # Update last refresh time
+            self.last_refresh = datetime.now()
+            self.state_manager.set("last_refresh", self.last_refresh)
+            
+            self.notification_manager.success("Data refreshed successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to refresh data: {e}")
+            self.notification_manager.error(f"Failed to refresh data: {e}")
+            raise
+    
+    def is_loading_any(self) -> bool:
+        """Check if any operation is currently loading."""
+        loading_ops = self.loading_manager.get_all_loading_operations()
+        return len(loading_ops) > 0
+    
+    def get_loading_operations(self) -> Dict[str, Dict[str, Any]]:
+        """Get all currently loading operations."""
+        return self.loading_manager.get_all_loading_operations()
+    
+    def has_initialization_error(self) -> bool:
+        """Check if there was an initialization error."""
+        return self.initialization_error is not None
+    
+    def _register_refresh_operations(self) -> None:
+        """Register data refresh operations."""
+        if not all([self.config_service, self.data_service, self.analysis_service]):
+            return
+        
+        # Register trade data refresh
+        register_refresh_operation(
+            operation_name="trade_data",
+            refresh_function=lambda: self.data_service.load_trades(),
+            cache_key="cached_trades",
+            cache_ttl=timedelta(minutes=5),
+            loading_message="Loading trade data...",
+            success_message="Trade data loaded successfully",
+            error_message="Failed to load trade data"
+        )
+        
+        # Register configuration refresh
+        register_refresh_operation(
+            operation_name="app_config",
+            refresh_function=lambda: self.config_service.get_app_config(),
+            cache_key="cached_app_config",
+            cache_ttl=timedelta(minutes=10),
+            loading_message="Loading configuration...",
+            success_message="Configuration loaded successfully",
+            error_message="Failed to load configuration"
+        )
+        
+        # Register exchange configs refresh
+        register_refresh_operation(
+            operation_name="exchange_configs",
+            refresh_function=lambda: self.config_service.get_all_exchange_configs(),
+            cache_key="cached_exchange_configs",
+            cache_ttl=timedelta(minutes=10),
+            loading_message="Loading exchange configurations...",
+            success_message="Exchange configurations loaded successfully",
+            error_message="Failed to load exchange configurations"
+        )
+
+
+def get_app_state() -> AppState:
+    """Get or create application state from session state."""
+    if 'app_state' not in st.session_state:
+        st.session_state.app_state = AppState()
+        st.session_state.app_state.initialize_services()
+    
+    return st.session_state.app_state
+
+
+def setup_page_config() -> None:
+    """Configure Streamlit page settings."""
+    st.set_page_config(
+        page_title="Crypto Trading Journal",
+        page_icon="📈",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
+
+
+def render_sidebar_navigation() -> str:
+    """Render sidebar navigation and return selected page."""
+    st.sidebar.title("📈 Trading Journal")
+    
+    # Navigation menu
+    pages = {
+        "Trade History": "trade_history",
+        "Trend Analysis": "trend_analysis", 
+        "Confluence Analysis": "confluence_analysis",
+        "Configuration": "config"
+    }
+    
+    selected_page = st.sidebar.selectbox(
+        "Navigate to:",
+        options=list(pages.keys()),
+        key="page_selector"
+    )
+    
+    # Data synchronization section
+    render_sync_controls()
+    
+    # Display connection status
+    render_connection_status()
+    
+    return pages[selected_page]
+
+
+def render_sync_controls() -> None:
+    """Render data synchronization controls in sidebar."""
+    st.sidebar.subheader("🔄 Data Sync")
+    
+    app_state = get_app_state()
+    
+    # Main sync buttons
+    col1, col2 = st.sidebar.columns(2)
+    
+    with col1:
+        if st.button("Refresh All", key="refresh_all_button", use_container_width=True):
+            app_state.refresh_data()
+            st.rerun()
+    
+    with col2:
+        if st.button("Sync Exchange", key="sync_exchange_button", use_container_width=True):
+            sync_exchange_data()
+            st.rerun()
+    
+    # Display sync status
+    render_sync_status()
+    
+    # Advanced sync controls in expander
+    with st.sidebar.expander("Advanced Sync"):
+        if st.button("Force Full Sync", key="force_sync_button", use_container_width=True):
+            force_full_sync()
+            st.rerun()
+        
+        if st.button("Sync Partial Positions", key="partial_sync_button", use_container_width=True):
+            sync_partial_positions()
+            st.rerun()
+        
+        if st.button("Clear Cache", key="clear_cache_button", use_container_width=True):
+            clear_all_caches()
+            st.rerun()
+
+
+def render_sync_status() -> None:
+    """Render sync status information."""
+    app_state = get_app_state()
+    
+    # Display last refresh time
+    if app_state.last_refresh:
+        time_str = app_state.last_refresh.strftime('%H:%M:%S')
+        st.sidebar.caption(f"Last refresh: {time_str}")
+    else:
+        st.sidebar.caption("No recent refresh")
+    
+    # Display sync progress if any operation is loading
+    if app_state.is_loading_any():
+        loading_ops = app_state.get_loading_operations()
+        for operation, data in loading_ops.items():
+            message = data.get('message', f"Loading {operation}...")
+            st.sidebar.info(f"⏳ {message}")
+
+
+def sync_exchange_data() -> None:
+    """Synchronize data from exchanges."""
+    sync_ui_manager = get_sync_ui_manager()
+    sync_ui_manager._sync_exchange_data()
+
+
+def force_full_sync() -> None:
+    """Force a full synchronization of all exchange data."""
+    sync_ui_manager = get_sync_ui_manager()
+    sync_ui_manager._force_full_sync()
+
+
+def sync_partial_positions() -> None:
+    """Sync only partially closed positions."""
+    sync_ui_manager = get_sync_ui_manager()
+    sync_ui_manager._sync_partial_positions()
+
+
+def clear_all_caches() -> None:
+    """Clear all application caches."""
+    sync_ui_manager = get_sync_ui_manager()
+    sync_ui_manager._clear_caches()
+
+
+@handle_exceptions(context="Connection Status Display", show_to_user=False)
+def render_connection_status() -> None:
+    """Render exchange connection status in sidebar."""
+    try:
+        app_state = get_app_state()
+        if app_state.config_service:
+            exchange_configs = app_state.config_service.get_all_exchange_configs()
+            
+            if exchange_configs:
+                st.sidebar.subheader("Exchange Status")
+                for name, config in exchange_configs.items():
+                    if config.is_active:
+                        status_color = {
+                            "connected": "🟢",
+                            "error": "🔴", 
+                            "testing": "🟡",
+                            "unknown": "⚪"
+                        }.get(config.connection_status.value.lower(), "⚪")
+                        
+                        # Show last sync time if available
+                        sync_info = ""
+                        if config.last_sync:
+                            sync_time = config.last_sync.strftime('%H:%M')
+                            sync_info = f" (synced {sync_time})"
+                        
+                        st.sidebar.caption(f"{status_color} {name.title()}{sync_info}")
+            else:
+                st.sidebar.caption("No exchanges configured")
+    except Exception as e:
+        logger.error(f"Error rendering connection status: {e}")
+        st.sidebar.error("Error loading connection status")
+
+
+def render_messages() -> None:
+    """Render notifications and loading states."""
+    app_state = get_app_state()
+    
+    # Render notifications
+    render_notifications()
+    
+    # Render loading states
+    if app_state.is_loading_any():
+        loading_ops = app_state.get_loading_operations()
+        
+        for operation, data in loading_ops.items():
+            message = data.get('message', f"Loading {operation}...")
+            st.info(f"⏳ {message}")
+    
+    # Show initialization error if present
+    if app_state.has_initialization_error():
+        st.error(f"Application initialization failed: {app_state.initialization_error}")
+        st.info("Please check the logs and try refreshing the page.")
+
+
+def render_page_placeholder(page_name: str) -> None:
+    """Render placeholder content for pages not yet implemented."""
+    st.title(page_name.replace('_', ' ').title())
+    st.info(f"The {page_name.replace('_', ' ').title()} page is coming soon!")
+    
+    # Show some basic info about the application state
+    app_state = get_app_state()
+    
+    if app_state.data_service:
+        try:
+            stats = app_state.data_service.get_trade_statistics()
+            
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("Total Trades", stats['total_trades'])
+            
+            with col2:
+                st.metric("Open Trades", stats['open_trades'])
+            
+            with col3:
+                st.metric("Closed Trades", stats['closed_trades'])
+            
+            with col4:
+                st.metric("Total PnL", f"${stats['total_pnl']:.2f}")
+            
+            if stats['exchanges']:
+                st.subheader("Configured Exchanges")
+                st.write(", ".join(stats['exchanges']))
+            
+            if stats['symbols']:
+                st.subheader("Traded Symbols")
+                st.write(", ".join(stats['symbols'][:10]))  # Show first 10
+                if len(stats['symbols']) > 10:
+                    st.caption(f"... and {len(stats['symbols']) - 10} more")
+            
+        except Exception as e:
+            st.error(f"Error loading statistics: {e}")
+
+
+@handle_exceptions(context="Main Application", show_to_user=True)
+def main() -> None:
+    """Main application entry point."""
+    try:
+        # Setup page configuration
+        setup_page_config()
+        
+        # Get application state
+        get_app_state()
+        
+        # Render navigation and get selected page
+        selected_page = render_sidebar_navigation()
+        
+        # Render messages and notifications
+        render_messages()
+        
+        # Route to appropriate page
+        if selected_page == "trade_history":
+            from app.pages.trade_history import show_trade_history_page
+            show_trade_history_page()
+        elif selected_page == "trend_analysis":
+            from app.pages.trend_analysis import show_trend_analysis_page
+            show_trend_analysis_page()
+        elif selected_page == "confluence_analysis":
+            from app.pages.confluence_analysis import show_confluence_analysis_page
+            show_confluence_analysis_page()
+        elif selected_page == "config":
+            from app.pages.config import show_config_page
+            show_config_page()
+        else:
+            st.error(f"Unknown page: {selected_page}")
+    
+    except Exception as e:
+        logger.error(f"Application error: {e}")
+        error_reporter.save_error_report(e, "Main Application")
+        st.error("A critical application error occurred. Please check the logs for details.")
+        
+        # Show error statistics in sidebar for debugging
+        if st.sidebar.button("Show Error Details"):
+            error_stats = error_handler.get_error_stats()
+            st.sidebar.json(error_stats)
+
 
 if __name__ == "__main__":
     main()

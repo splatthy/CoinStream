@@ -1,39 +1,93 @@
+version: '3.8'
+
 services:
   trading-journal:
-    build: .
+    build: 
+      context: .
+      target: production
     container_name: crypto-trading-journal
     ports:
       - "8501:8501"
     volumes:
-      - ./data:/app/data
-      - ./app:/app/app  # Mount for development hot-reload
+      - type: bind
+        source: ./data
+        target: /app/data
+        bind:
+          create_host_path: true
     environment:
       - PYTHONPATH=/app
-      - STREAMLIT_SERVER_PORT=8501
-      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
       - DATA_PATH=/app/data
+      - LOG_LEVEL=INFO
+      - TZ=UTC
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
       interval: 30s
-      timeout: 10s
+      timeout: 15s
       retries: 3
-      start_period: 40s
+      start_period: 60s
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=100m
+      - /home/appuser/.streamlit:noexec,nosuid,size=10m
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    networks:
+      - trading-journal-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
-  # Optional: Add a development service with hot-reload
+  # Development service with hot-reload
   trading-journal-dev:
-    build: .
+    build: 
+      context: .
+      target: production
     container_name: crypto-trading-journal-dev
     ports:
       - "8502:8501"
     volumes:
-      - ./data:/app/data
-      - ./app:/app/app
+      - type: bind
+        source: ./data
+        target: /app/data
+        bind:
+          create_host_path: true
+      - type: bind
+        source: ./app
+        target: /app/app
+        read_only: true
     environment:
       - PYTHONPATH=/app
-      - STREAMLIT_SERVER_PORT=8501
-      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
       - DATA_PATH=/app/data
-    command: ["streamlit", "run", "app/main.py", "--server.port=8501", "--server.address=0.0.0.0", "--server.runOnSave=true"]
+      - LOG_LEVEL=DEBUG
+      - TZ=UTC
+    command: ["streamlit", "run", "app/main.py", "--server.port=8501", "--server.address=0.0.0.0", "--server.runOnSave=true", "--server.fileWatcherType=poll"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 60s
+    networks:
+      - trading-journal-network
     profiles:
       - dev
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  trading-journal-network:
+    driver: bridge
+    name: trading-journal-network

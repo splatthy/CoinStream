@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  trading-journal:
+    build: 
+      context: .
+      target: production
+    container_name: crypto-trading-journal-prod
+    ports:
+      - "8501:8501"
+    volumes:
+      - type: bind
+        source: ./data
+        target: /app/data
+        bind:
+          create_host_path: true
+    environment:
+      - PYTHONPATH=/app
+      - DATA_PATH=/app/data
+      - LOG_LEVEL=WARNING
+      - TZ=UTC
+      - STREAMLIT_SERVER_HEADLESS=true
+      - STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 90s
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:noexec,nosuid,size=100m
+      - /home/appuser/.streamlit:noexec,nosuid,size=10m
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    networks:
+      - trading-journal-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+
+networks:
+  trading-journal-network:
+    driver: bridge
+    name: trading-journal-prod-network
