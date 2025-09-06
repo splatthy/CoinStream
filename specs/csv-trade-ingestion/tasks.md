@@ -6,14 +6,14 @@
   - [ ] 1.1 Create CSV data models and validation schemas
     - Write ColumnMapping dataclass with validation methods
     - Write ImportResult and ValidationResult models
-    - Create ValidationError and ValidationWarning classes
+    - Add lightweight CSVValidationIssue (warning/info container) — reuse app/utils/validators.ValidationError for exceptions
     - Write unit tests for all data models
     - _Requirements: 2.1, 2.4, 6.2_
 
   - [ ] 1.2 Implement CSV file parsing utilities
-    - Write CSVParser class with delimiter and encoding detection
+    - Write CSVParser class with delimiter and encoding detection (csv.Sniffer, utf-8 → latin-1 fallback)
     - Implement multi-format date parsing with fallback strategies
-    - Create file validation for size, format, and encoding
+    - Create file validation for size, format, and encoding (no API usage, offline only)
     - Write unit tests for parsing edge cases and error conditions
     - _Requirements: 1.5, 8.4, 9.1_
 
@@ -27,12 +27,12 @@
     - _Requirements: 2.1, 2.2, 2.3, 2.4, 4.4_
 
   - [ ] 2.2 Implement column mapping system
-    - Write ColumnMapper class with automatic mapping suggestions
-    - Create pattern matching for common column names across exchanges
-    - Implement manual mapping override functionality
-    - Create mapping template save/load functionality
-    - Write unit tests for mapping logic and edge cases
-    - _Requirements: 6.1, 6.2, 6.3, 6.4, 6.5_
+    - Write ColumnMapper class to load shipped, exchange-specific mapping templates (JSON)
+    - Create pattern matching fallback for common column names (used only if no template found)
+    - Do NOT implement manual override UI or save/load in MVP; mappings are shipped with the app
+    - Store templates under `app/services/csv_import/mappings/<exchange>.json` (e.g., Bitunix)
+    - Write unit tests for mapping selection (exchange → template) and fallback logic
+    - _Requirements: 6.1, 6.2 (shipping templates), 6.4_
 
 - [ ] 3. Create data transformation pipeline
   - [ ] 3.1 Build data transformer for Trade model conversion
@@ -40,37 +40,41 @@
     - Implement PnL calculation for missing values using entry/exit prices
     - Create trade side normalization (Long/Short to TradeSide enum)
     - Implement timestamp parsing with multiple format support
+    - Generate deterministic trade ID from fields (e.g., symbol|entry_time|quantity|entry_price hash) to enable future duplicate handling
+    - Set `exchange` field from user-selected exchange in UI (e.g., "bitunix")
     - Write unit tests for transformation accuracy and edge cases
     - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5_
 
   - [ ] 3.2 Implement batch processing for large files
-    - Create chunked processing for files larger than 10MB
-    - Implement progress tracking and callback system
-    - Create memory-efficient streaming for very large datasets
-    - Write transaction-based import with rollback capability
+    - MVP: single-pass import with progress bar updates (UI), targeting files up to 50MB
+    - Create chunked processing for files larger than 10MB (Post-MVP)
+    - Implement progress tracking and callback system (MVP supports UI progress)
+    - Create memory-efficient streaming for very large datasets (Post-MVP)
+    - Write transaction-based import with rollback capability (Post-MVP)
     - Write performance tests with large CSV files
     - _Requirements: 4.1, 4.2, 4.3, 5.2_
 
 - [ ] 4. Build CSV import service orchestrator
   - [ ] 4.1 Create main CSV import service
     - Write CSVImportService class as main orchestrator
-    - Implement full import workflow with validation, transformation, and storage
+    - Implement full import workflow with validation, transformation, and storage (offline only; no API usage)
     - Create preview functionality for data verification before import
     - Implement comprehensive error handling and recovery
     - Write integration tests for complete import process
     - _Requirements: 1.1, 4.1, 4.2, 7.1, 7.4_
 
   - [ ] 4.2 Add duplicate handling and data integrity
-    - Implement duplicate detection and user choice (skip/overwrite/merge)
+    - MVP: Generate deterministic trade IDs; skip duplicates automatically and count in summary (no user prompt)
     - Create data integrity checks before and after import
     - Implement import summary with statistics and warnings
-    - Create rollback functionality for failed imports
+    - Plan for future strategies (overwrite/merge) without breaking current design
+    - Create rollback functionality for failed imports (Post-MVP)
     - Write tests for duplicate scenarios and data integrity
     - _Requirements: 4.4, 4.5, 9.5_
 
 - [ ] 5. Create CSV import user interface
   - [ ] 5.1 Design CSV import UX flow and page structure
-    - Design multi-step import workflow: Upload → Validate → Map → Preview → Import
+    - Design multi-step import workflow: Upload → Select Exchange → Validate → Preview → Import
     - Create step indicator showing current progress in import process
     - Implement proper Streamlit form structure for each step
     - Design error state handling and recovery within the workflow
@@ -86,13 +90,13 @@
     - Write UI tests for upload functionality
     - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5_
 
-  - [ ] 5.2 Implement column mapping interface
-    - Create interactive column mapping UI with dropdowns
-    - Implement automatic mapping suggestions with manual override
-    - Create mapping template management (save/load/delete)
-    - Add mapping validation with real-time feedback
-    - Write UI tests for mapping functionality
-    - _Requirements: 6.1, 6.2, 6.3, 6.4, 6.5_
+  - [ ] 5.2 Implement exchange selection and mapping preview
+    - Add exchange selection dropdown (e.g., Bitunix, etc.)
+    - Load and display read-only mapping derived from shipped template for selected exchange
+    - Show header-to-field preview; no manual overrides in MVP
+    - Validate mapping presence and show helpful errors if unsupported
+    - Write UI tests for exchange selection and mapping preview
+    - _Requirements: 6.1, 6.2 (shipped), 6.4_
 
 - [ ] 6. Build data preview and confirmation system
   - [ ] 6.1 Create data preview component
@@ -105,7 +109,7 @@
 
   - [ ] 6.2 Implement import confirmation and progress tracking
     - Create import confirmation dialog with summary statistics
-    - Build real-time progress bar with row count and percentage
+    - Build real-time progress bar with row count and percentage (MVP requirement)
     - Implement cancellation functionality during import
     - Create import completion summary with success/error statistics
     - Write UI tests for progress tracking and completion
@@ -165,7 +169,7 @@
     - _Requirements: 1.1, 8.1_
 
   - [ ] 9.3 Implement proper Streamlit session state management
-    - Create session state keys for CSV import workflow (file_uploaded, mapping_config, preview_data)
+    - Create session state keys for CSV import workflow (file_uploaded, selected_exchange, loaded_mapping, preview_data, import_summary)
     - Implement state cleanup when navigating away from import page
     - Use `st.rerun()` properly for state updates during import process
     - Implement proper form handling with `st.form()` for file upload and mapping
@@ -183,9 +187,9 @@
     - _Requirements: All requirements_
 
   - [ ] 10.2 Add sample data and documentation
-    - Create sample CSV files for different exchange formats
-    - Write user documentation for CSV import process
+    - Include sample CSV files (e.g., `bitunix_trades_clean.csv`) and corresponding shipped mapping templates
+    - Write user documentation for CSV import process (no API usage; offline-only)
     - Create troubleshooting guide for common issues
-    - Add CSV format specification documentation
-    - Write developer documentation for extending format support
+    - Add CSV format specification documentation (per exchange template)
+    - Write developer documentation for onboarding a new exchange (add new `<exchange>.json` template + tests)
     - _Requirements: 8.1, 8.2, 8.3_
