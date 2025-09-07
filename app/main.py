@@ -164,6 +164,7 @@ def render_sidebar_navigation() -> str:
         "Trade History": "trade_history",
         "Trend Analysis": "trend_analysis",
         "Confluence Analysis": "confluence_analysis",
+        "Import Data": "csv_import",
         "Configuration": "config",
     }
 
@@ -244,6 +245,10 @@ def main() -> None:
             from app.pages.config import show_config_page
 
             show_config_page()
+        elif selected_page == "csv_import":
+            from app.pages.csv_import import show_csv_import_page
+
+            show_csv_import_page()
         else:
             st.error(f"Unknown page: {selected_page}")
 

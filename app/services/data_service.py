@@ -12,8 +12,8 @@ import logging
 
 from app.models.trade import Trade, TradeStatus, TradeSide, WinLoss
 from app.utils.serialization import DataSerializer
+from app.services.storage.parquet_store import ParquetTradeStore
 from app.utils.validators import DataValidator, ValidationError
-from app.utils.backup_recovery import BackupManager
 
 
 logger = logging.getLogger(__name__)
@@ -30,12 +30,13 @@ class DataService:
             data_path: Path to data directory
         """
         self.data_path = Path(data_path)
-        self.trades_file = self.data_path / "trades.json"
-        self.backup_manager = BackupManager(str(self.data_path))
-        
+        # JSON storage removed in MVP; Parquet is the single source of truth
         # Ensure data directory exists
         self.data_path.mkdir(exist_ok=True)
         
+        # Initialize Parquet store
+        self._parquet_store = ParquetTradeStore(str(self.data_path))
+
         # In-memory cache for trades
         self._trades_cache: Optional[List[Trade]] = None
         self._cache_last_modified: Optional[datetime] = None
@@ -56,38 +57,10 @@ class DataService:
                 logger.debug("Using cached trade data")
                 return self._trades_cache.copy()
             
-            if not self.trades_file.exists():
-                logger.info("Trades file does not exist, returning empty list")
-                self._trades_cache = []
-                self._cache_last_modified = datetime.now()
-                return []
-            
-            logger.info(f"Loading trades from {self.trades_file}")
-            
-            with open(self.trades_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            
-            # Validate data structure
-            if not isinstance(data, list):
-                raise ValidationError("Trades file must contain a list of trades")
-            
-            trades = []
-            for i, trade_data in enumerate(data):
-                try:
-                    # Validate trade data before deserializing
-                    validated_data = DataValidator.validate_trade_data(trade_data)
-                    trade = DataSerializer.deserialize_trade(validated_data)
-                    trades.append(trade)
-                except Exception as e:
-                    logger.error(f"Error loading trade at index {i}: {e}")
-                    # Continue loading other trades instead of failing completely
-                    continue
-            
-            # Update cache
+            trades = self._parquet_store.load_trades()
             self._trades_cache = trades
             self._cache_last_modified = datetime.now()
-            
-            logger.info(f"Successfully loaded {len(trades)} trades")
+            logger.info(f"Successfully loaded {len(trades)} trades from Parquet store")
             return trades.copy()
             
         except Exception as e:
@@ -105,44 +78,16 @@ class DataService:
             Exception: If saving fails
         """
         try:
-            logger.info(f"Saving {len(trades)} trades to {self.trades_file}")
-            
-            # Create backup before saving
-            if self.trades_file.exists():
-                self.backup_manager.create_backup("trades.json")
-            
-            # Serialize trades
-            serialized_trades = []
-            for trade in trades:
-                try:
-                    trade.validate()  # Ensure trade is valid before saving
-                    serialized_data = DataSerializer.serialize_trade(trade)
-                    serialized_trades.append(serialized_data)
-                except Exception as e:
-                    logger.error(f"Error serializing trade {trade.id}: {e}")
-                    raise Exception(f"Error serializing trade {trade.id}: {e}")
-            
-            # Write to temporary file first, then rename for atomic operation
-            temp_file = self.trades_file.with_suffix('.tmp')
-            
-            with open(temp_file, 'w', encoding='utf-8') as f:
-                json.dump(serialized_trades, f, indent=2, ensure_ascii=False)
-            
-            # Atomic rename
-            temp_file.replace(self.trades_file)
-            
-            # Update cache
+            logger.info(f"Saving {len(trades)} trades to Parquet store")
+            for t in trades:
+                t.validate()
+            self._parquet_store.save_trades(trades)
             self._trades_cache = trades.copy()
             self._cache_last_modified = datetime.now()
-            
-            logger.info(f"Successfully saved {len(trades)} trades")
+            logger.info(f"Successfully saved {len(trades)} trades to Parquet store")
             
         except Exception as e:
             logger.error(f"Failed to save trades: {e}")
-            # Clean up temporary file if it exists
-            temp_file = self.trades_file.with_suffix('.tmp')
-            if temp_file.exists():
-                temp_file.unlink()
             raise Exception(f"Failed to save trades: {e}")
     
     def update_trade(self, trade_id: str, updates: Dict[str, Any]) -> Trade:
@@ -491,13 +436,26 @@ class DataService:
         """Check if cached data should be used."""
         if self._trades_cache is None or self._cache_last_modified is None:
             return False
-        
-        # Check if file has been modified since cache was created
-        if self.trades_file.exists():
-            file_mtime = datetime.fromtimestamp(self.trades_file.stat().st_mtime)
-            if file_mtime > self._cache_last_modified:
-                return False
-        
+
+        # No file mtime check for Parquet; rely on TTL
+
         # Use cache if it's less than 5 minutes old
         cache_age = datetime.now() - self._cache_last_modified
         return cache_age < timedelta(minutes=5)
+
+    def _detect_storage_backend(self) -> str:
+        """
+        Detect storage backend from app config if available; fallback to 'json'.
+        Reads DATA_PATH/config.json and expects key 'storage_backend'.
+        """
+        try:
+            config_path = self.data_path / "config.json"
+            if config_path.exists():
+                with open(config_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                backend = str(data.get("storage_backend", "json")).lower()
+                if backend in ("json", "parquet"):
+                    return backend
+        except Exception:
+            pass
+        return "json"

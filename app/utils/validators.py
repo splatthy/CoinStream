@@ -7,7 +7,6 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, List, Dict, Optional, Union
 from app.models.trade import Trade, TradeSide, TradeStatus, WinLoss
-from app.models.position import Position, PositionSide, PositionStatus
 from app.models.exchange_config import ExchangeConfig, ConnectionStatus
 from app.models.custom_fields import CustomFieldConfig, FieldType
 
@@ -214,37 +213,7 @@ class DataValidator:
         return validated
 
     @staticmethod
-    def validate_position_data(data: Dict[str, Any]) -> Dict[str, Any]:
-        """Validate position data dictionary before creating Position object."""
-        validated = {}
-        
-        # Required fields
-        validated['position_id'] = DataValidator.validate_string(data.get('position_id'), 'position_id')
-        validated['symbol'] = DataValidator.validate_symbol_format(data.get('symbol'))
-        validated['side'] = DataValidator.validate_enum(data.get('side'), PositionSide, 'side')
-        validated['size'] = DataValidator.validate_decimal(data.get('size'), 'size', Decimal('0'))
-        validated['entry_price'] = DataValidator.validate_decimal(data.get('entry_price'), 'entry_price', Decimal('0'))
-        validated['mark_price'] = DataValidator.validate_decimal(data.get('mark_price'), 'mark_price', Decimal('0'))
-        validated['unrealized_pnl'] = DataValidator.validate_decimal(data.get('unrealized_pnl'), 'unrealized_pnl')
-        validated['realized_pnl'] = DataValidator.validate_decimal(data.get('realized_pnl'), 'realized_pnl')
-        validated['status'] = DataValidator.validate_enum(data.get('status'), PositionStatus, 'status')
-        validated['open_time'] = DataValidator.validate_datetime(data.get('open_time'), 'open_time')
-        
-        # Optional fields
-        if 'close_time' in data and data['close_time'] is not None:
-            validated['close_time'] = DataValidator.validate_datetime(data['close_time'], 'close_time')
-        
-        validated['raw_data'] = DataValidator.validate_dict(
-            data.get('raw_data', {}), 'raw_data'
-        )
-        
-        if 'created_at' in data:
-            validated['created_at'] = DataValidator.validate_datetime(data['created_at'], 'created_at')
-        
-        if 'updated_at' in data:
-            validated['updated_at'] = DataValidator.validate_datetime(data['updated_at'], 'updated_at')
-        
-        return validated
+    # Removed: validate_position_data is not used in CSV-only POC
 
     @staticmethod
     def validate_custom_field_value(value: Any, field_config: CustomFieldConfig) -> Any:

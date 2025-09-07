@@ -2,7 +2,7 @@
 Data models for the crypto trading journal application.
 """
 
-from .custom_fields import CustomField, CustomFieldType
+from .custom_fields import CustomFieldConfig, FieldType
 from .trade import Trade, TradeSide, TradeStatus, WinLoss
 
 __all__ = [
@@ -10,6 +10,6 @@ __all__ = [
     "TradeSide",
     "TradeStatus",
     "WinLoss",
-    "CustomField",
-    "CustomFieldType",
+    "CustomFieldConfig",
+    "FieldType",
 ]

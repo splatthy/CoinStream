@@ -9,7 +9,6 @@ from typing import Any, Dict, List, Union, Type
 from enum import Enum
 
 from app.models.trade import Trade, TradeSide, TradeStatus, WinLoss
-from app.models.position import Position, PositionSide, PositionStatus
 from app.models.exchange_config import ExchangeConfig, ConnectionStatus
 from app.models.custom_fields import CustomFieldConfig, FieldType
 
@@ -58,6 +57,33 @@ class DataSerializer:
     @staticmethod
     def deserialize_trade(data: Dict[str, Any]) -> Trade:
         """Deserialize dictionary to Trade object."""
+        # Defensive coercions for fields that may round-trip as strings in Parquet
+        confluences_val = data.get("confluences", [])
+        if confluences_val is None:
+            confluences_val = []
+        elif not isinstance(confluences_val, list):
+            # Try to parse JSON string; otherwise wrap non-empty string as single-item list
+            try:
+                import json as _json
+                parsed = _json.loads(confluences_val)
+                if isinstance(parsed, list):
+                    confluences_val = parsed
+                else:
+                    confluences_val = [str(parsed)] if parsed is not None else []
+            except Exception:
+                confluences_val = [str(confluences_val)] if str(confluences_val).strip() else []
+
+        custom_fields_val = data.get("custom_fields", {})
+        if custom_fields_val is None:
+            custom_fields_val = {}
+        elif not isinstance(custom_fields_val, dict):
+            try:
+                import json as _json
+                parsed_cf = _json.loads(custom_fields_val)
+                custom_fields_val = parsed_cf if isinstance(parsed_cf, dict) else {}
+            except Exception:
+                custom_fields_val = {}
+
         return Trade(
             id=data["id"],
             exchange=data["exchange"],
@@ -67,61 +93,18 @@ class DataSerializer:
             quantity=Decimal(data["quantity"]),
             entry_time=datetime.fromisoformat(data["entry_time"]),
             status=TradeStatus(data["status"]),
-            confluences=data.get("confluences", []),
+            confluences=confluences_val,
             exit_price=Decimal(data["exit_price"]) if data.get("exit_price") else None,
             exit_time=datetime.fromisoformat(data["exit_time"])
             if data.get("exit_time")
             else None,
             pnl=Decimal(data["pnl"]) if data.get("pnl") else None,
             win_loss=WinLoss(data["win_loss"]) if data.get("win_loss") else None,
-            custom_fields=data.get("custom_fields", {}),
+            custom_fields=custom_fields_val,
             created_at=datetime.fromisoformat(data["created_at"]) if data.get("created_at") else datetime.now(),
             updated_at=datetime.fromisoformat(data["updated_at"]) if data.get("updated_at") else datetime.now(),
         )
 
-    @staticmethod
-    def serialize_position(position: Position) -> Dict[str, Any]:
-        """Serialize a Position object to dictionary."""
-        return {
-            "position_id": position.position_id,
-            "symbol": position.symbol,
-            "side": position.side.value,
-            "size": str(position.size),
-            "entry_price": str(position.entry_price),
-            "mark_price": str(position.mark_price),
-            "unrealized_pnl": str(position.unrealized_pnl),
-            "realized_pnl": str(position.realized_pnl),
-            "status": position.status.value,
-            "open_time": position.open_time.isoformat(),
-            "close_time": position.close_time.isoformat()
-            if position.close_time
-            else None,
-            "raw_data": position.raw_data.copy(),
-            "created_at": position.created_at.isoformat(),
-            "updated_at": position.updated_at.isoformat(),
-        }
-
-    @staticmethod
-    def deserialize_position(data: Dict[str, Any]) -> Position:
-        """Deserialize dictionary to Position object."""
-        return Position(
-            position_id=data["position_id"],
-            symbol=data["symbol"],
-            side=PositionSide(data["side"]),
-            size=Decimal(data["size"]),
-            entry_price=Decimal(data["entry_price"]),
-            mark_price=Decimal(data["mark_price"]),
-            unrealized_pnl=Decimal(data["unrealized_pnl"]),
-            realized_pnl=Decimal(data["realized_pnl"]),
-            status=PositionStatus(data["status"]),
-            open_time=datetime.fromisoformat(data["open_time"]),
-            close_time=datetime.fromisoformat(data["close_time"])
-            if data.get("close_time")
-            else None,
-            raw_data=data.get("raw_data", {}),
-            created_at=datetime.fromisoformat(data["created_at"]),
-            updated_at=datetime.fromisoformat(data["updated_at"]),
-        )
 
     @staticmethod
     def serialize_exchange_config(config: ExchangeConfig) -> Dict[str, Any]:
@@ -194,16 +177,7 @@ class DataSerializer:
         return [DataSerializer.deserialize_trade(trade_data) for trade_data in data]
 
     @staticmethod
-    def serialize_positions_list(positions: List[Position]) -> List[Dict[str, Any]]:
-        """Serialize a list of Position objects."""
-        return [DataSerializer.serialize_position(position) for position in positions]
-
-    @staticmethod
-    def deserialize_positions_list(data: List[Dict[str, Any]]) -> List[Position]:
-        """Deserialize a list of dictionaries to Position objects."""
-        return [
-            DataSerializer.deserialize_position(position_data) for position_data in data
-        ]
+    # Removed: position serialization in CSV-only POC
 
     @staticmethod
     def serialize_exchange_configs_list(

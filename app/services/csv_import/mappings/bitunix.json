@@ -1,0 +1,16 @@
+{
+  "name": "Bitunix",
+  "description": "Mapping for Bitunix trade export (bitunix_trades_clean.csv)",
+  "fields": {
+    "symbol": "symbol",
+    "side": "side",
+    "quantity": "quantity",
+    "entry_price": "Entry Price",
+    "exit_price": "Exit Price",
+    "entry_time": "Opening Date",
+    "exit_time": "Date",
+    "pnl": "Net PnL",
+    "fees": "Fees"
+  }
+}
+

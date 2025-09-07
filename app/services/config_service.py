@@ -219,210 +219,60 @@ class ConfigService:
         return False
 
     def get_confluence_options(self) -> List[str]:
-        """
-        Get available confluence options from custom field configurations.
-
-        Returns:
-            List of confluence option strings
-        """
-        confluence_config = self.get_custom_field_config("confluences")
-        if confluence_config and confluence_config.field_type in [
-            FieldType.SELECT,
-            FieldType.MULTISELECT,
-        ]:
-            return confluence_config.options.copy()
-
-        return []
+        """Get available confluence options from app config taxonomy."""
+        if self._app_config is None:
+            self._load_app_config()
+        options = self._app_config.get("confluence_options", []) or []
+        clean = []
+        seen = set()
+        for opt in options:
+            s = str(opt).strip()
+            if s and s not in seen:
+                seen.add(s)
+                clean.append(s)
+        return clean
 
     def update_confluence_options(self, options: List[str]) -> None:
-        """
-        Update confluence options in custom field configuration.
-
-        Args:
-            options: List of confluence option strings
-        """
-        confluence_config = self.get_custom_field_config("confluences")
-
-        if confluence_config is None:
-            # Create default confluence configuration
-            confluence_config = CustomFieldConfig(
-                field_name="confluences",
-                field_type=FieldType.MULTISELECT,
-                options=options,
-                is_required=False,
-                description="Trading confluences for analysis",
-            )
-        else:
-            confluence_config.update_options(options)
-
-        self.save_custom_field_config(confluence_config)
+        """Update confluence taxonomy in app config."""
+        if self._app_config is None:
+            self._load_app_config()
+        clean = []
+        seen = set()
+        for opt in options or []:
+            s = str(opt).strip()
+            if s and s not in seen:
+                seen.add(s)
+                clean.append(s)
+        self._app_config["confluence_options"] = clean
+        self._save_app_config()
 
     def validate_api_key(self, exchange_name: str, api_key: str) -> bool:
-        """
-        Validate API key format and basic requirements.
-
-        Args:
-            exchange_name: Name of the exchange
-            api_key: API key to validate
-
-        Returns:
-            True if API key format is valid, False otherwise
-        """
-        if not api_key or not isinstance(api_key, str):
-            return False
-
-        # Remove whitespace
-        api_key = api_key.strip()
-
-        if not api_key:
-            return False
-
-        # Basic validation based on exchange
-        if exchange_name.lower() == "bitunix":
-            # Bitunix API keys are typically 16-128 characters alphanumeric with some special chars
-            if len(api_key) < 8 or len(api_key) > 128:
-                return False
-
-            # Should contain only alphanumeric characters and some special chars
-            import re
-
-            if not re.match(r"^[a-zA-Z0-9\-_]+$", api_key):
-                return False
-
-        return True
+        """Deprecated: no exchange API validation in CSV-only POC."""
+        return False
 
     def encrypt_and_store_api_key(self, exchange_name: str, api_key: str) -> str:
-        """
-        Encrypt API key and return encrypted string for storage.
-
-        Args:
-            exchange_name: Name of the exchange
-            api_key: Plain text API key
-
-        Returns:
-            Encrypted API key string
-
-        Raises:
-            ValueError: If encryption fails
-        """
-        try:
-            return self.encryption_manager.encrypt_credential(api_key)
-        except Exception as e:
-            raise ValueError(f"Failed to encrypt API key for {exchange_name}: {e}")
+        """Deprecated: no exchange API usage in CSV-only POC."""
+        raise NotImplementedError("Exchange API credentials are not supported in CSV-only POC")
 
     def decrypt_api_key(self, exchange_name: str, encrypted_api_key: str) -> str:
-        """
-        Decrypt stored API key.
-
-        Args:
-            exchange_name: Name of the exchange
-            encrypted_api_key: Encrypted API key string
-
-        Returns:
-            Decrypted API key
-
-        Raises:
-            ValueError: If decryption fails
-        """
-        try:
-            return self.encryption_manager.decrypt_credential(encrypted_api_key)
-        except Exception as e:
-            raise ValueError(f"Failed to decrypt API key for {exchange_name}: {e}")
+        """Deprecated: no exchange API usage in CSV-only POC."""
+        raise NotImplementedError("Exchange API credentials are not supported in CSV-only POC")
 
     def test_exchange_connection(
         self, exchange_name: str, api_key: str = None, api_secret: str = None
     ) -> bool:
-        """
-        Test connection to exchange using API key.
-
-        Args:
-            exchange_name: Name of the exchange
-            api_key: API key to test (if None, uses stored key)
-
-        Returns:
-            True if connection successful, False otherwise
-        """
-        try:
-            # Get API credentials if not provided
-            if api_key is None:
-                config = self.get_exchange_config(exchange_name)
-                if not config:
-                    return False
-                api_key = self.decrypt_api_key(exchange_name, config.api_key_encrypted)
-
-                # Get API secret if available
-                if config.api_secret_encrypted:
-                    api_secret = self.decrypt_api_key(
-                        f"{exchange_name}_secret", config.api_secret_encrypted
-                    )
-
-            # Import exchange client dynamically based on exchange name
-            if exchange_name.lower() == "bitunix":
-                # Import and test with actual Bitunix client
-                from ..integrations.bitunix_client import BitunixClient
-
-                client = BitunixClient(api_key=api_key, api_secret=api_secret)
-                return client.test_connection()
-
-            return False
-
-        except Exception as e:
-            self.logger.error(f"Failed to test connection for {exchange_name}: {e}")
-            return False
+        """Deprecated: no exchange API usage in CSV-only POC."""
+        return False
 
     def update_exchange_connection_status(
         self, exchange_name: str, status: ConnectionStatus
     ) -> None:
-        """
-        Update connection status for an exchange.
-
-        Args:
-            exchange_name: Name of the exchange
-            status: New connection status
-        """
-        config = self.get_exchange_config(exchange_name)
-        if config:
-            config.update_connection_status(status)
-            self.save_exchange_config(config)
+        # Deprecated: no exchange API usage in CSV-only POC.
+        return
 
     def monitor_exchange_connections(self) -> Dict[str, ConnectionStatus]:
-        """
-        Monitor all active exchange connections and update their status.
-
-        Returns:
-            Dictionary mapping exchange names to their connection status
-        """
-        status_map = {}
-        active_exchanges = self.get_active_exchanges()
-
-        for exchange_config in active_exchanges:
-            try:
-                # Update status to testing
-                self.update_exchange_connection_status(
-                    exchange_config.name, ConnectionStatus.TESTING
-                )
-
-                # Test connection
-                is_connected = self.test_exchange_connection(exchange_config.name)
-
-                # Update status based on test result
-                new_status = (
-                    ConnectionStatus.CONNECTED
-                    if is_connected
-                    else ConnectionStatus.ERROR
-                )
-                self.update_exchange_connection_status(exchange_config.name, new_status)
-
-                status_map[exchange_config.name] = new_status
-
-            except Exception:
-                # Update status to error
-                self.update_exchange_connection_status(
-                    exchange_config.name, ConnectionStatus.ERROR
-                )
-                status_map[exchange_config.name] = ConnectionStatus.ERROR
-
-        return status_map
+        """Deprecated: no exchange API usage in CSV-only POC."""
+        return {}
 
     def create_exchange_config_with_validation(
         self,
@@ -431,104 +281,14 @@ class ConfigService:
         api_secret: str = None,
         test_connection: bool = True,
     ) -> ExchangeConfig:
-        """
-        Create and validate a new exchange configuration.
-
-        Args:
-            exchange_name: Name of the exchange
-            api_key: API key for the exchange
-            test_connection: Whether to test the connection before saving
-
-        Returns:
-            Created ExchangeConfig object
-
-        Raises:
-            ValueError: If validation fails
-        """
-        # Validate API key format
-        if not self.validate_api_key(exchange_name, api_key):
-            raise ValueError(f"Invalid API key format for {exchange_name}")
-
-        # Encrypt API key
-        encrypted_key = self.encrypt_and_store_api_key(exchange_name, api_key)
-
-        # Encrypt API secret if provided
-        encrypted_secret = None
-        if api_secret:
-            encrypted_secret = self.encrypt_and_store_api_key(
-                f"{exchange_name}_secret", api_secret
-            )
-
-        # Create configuration
-        config = ExchangeConfig(
-            name=exchange_name,
-            api_key_encrypted=encrypted_key,
-            api_secret_encrypted=encrypted_secret,
-            is_active=True,
-            connection_status=ConnectionStatus.UNKNOWN,
-        )
-
-        # Test connection if requested
-        if test_connection:
-            is_connected = self.test_exchange_connection(
-                exchange_name, api_key, api_secret
-            )
-            config.connection_status = (
-                ConnectionStatus.CONNECTED if is_connected else ConnectionStatus.ERROR
-            )
-
-        # Save configuration
-        self.save_exchange_config(config)
-
-        return config
+        """Deprecated: no exchange API usage in CSV-only POC."""
+        raise NotImplementedError("Exchange configuration with API validation is not supported")
 
     def update_exchange_api_key(
         self, exchange_name: str, new_api_key: str, test_connection: bool = True
     ) -> bool:
-        """
-        Update API key for an existing exchange configuration.
-
-        Args:
-            exchange_name: Name of the exchange
-            new_api_key: New API key
-            test_connection: Whether to test the connection before saving
-
-        Returns:
-            True if update successful, False otherwise
-        """
-        try:
-            # Get existing configuration
-            config = self.get_exchange_config(exchange_name)
-            if not config:
-                return False
-
-            # Validate new API key format
-            if not self.validate_api_key(exchange_name, new_api_key):
-                return False
-
-            # Encrypt new API key
-            encrypted_key = self.encrypt_and_store_api_key(exchange_name, new_api_key)
-
-            # Update configuration
-            config.api_key_encrypted = encrypted_key
-            config.connection_status = ConnectionStatus.UNKNOWN
-
-            # Test connection if requested
-            if test_connection:
-                is_connected = self.test_exchange_connection(exchange_name, new_api_key)
-                config.connection_status = (
-                    ConnectionStatus.CONNECTED
-                    if is_connected
-                    else ConnectionStatus.ERROR
-                )
-
-            # Save updated configuration
-            self.save_exchange_config(config)
-
-            return True
-
-        except Exception:
-            return False
+        """Deprecated: no exchange API usage in CSV-only POC."""
+        return False
 
     def update_exchange_credentials(
         self,
@@ -537,61 +297,8 @@ class ConfigService:
         new_api_secret: str = None,
         test_connection: bool = True,
     ) -> bool:
-        """
-        Update API key and secret for an existing exchange configuration.
-
-        Args:
-            exchange_name: Name of the exchange
-            new_api_key: New API key
-            new_api_secret: New API secret (optional)
-            test_connection: Whether to test the connection before saving
-
-        Returns:
-            True if update successful, False otherwise
-        """
-        try:
-            # Get existing configuration
-            config = self.get_exchange_config(exchange_name)
-            if not config:
-                return False
-
-            # Validate new API key format
-            if not self.validate_api_key(exchange_name, new_api_key):
-                return False
-
-            # Encrypt new API key
-            encrypted_key = self.encrypt_and_store_api_key(exchange_name, new_api_key)
-
-            # Encrypt new API secret if provided
-            encrypted_secret = None
-            if new_api_secret:
-                encrypted_secret = self.encrypt_and_store_api_key(
-                    f"{exchange_name}_secret", new_api_secret
-                )
-
-            # Update configuration
-            config.api_key_encrypted = encrypted_key
-            config.api_secret_encrypted = encrypted_secret
-            config.connection_status = ConnectionStatus.UNKNOWN
-
-            # Test connection if requested
-            if test_connection:
-                is_connected = self.test_exchange_connection(
-                    exchange_name, new_api_key, new_api_secret
-                )
-                config.connection_status = (
-                    ConnectionStatus.CONNECTED
-                    if is_connected
-                    else ConnectionStatus.ERROR
-                )
-
-            # Save updated configuration
-            self.save_exchange_config(config)
-
-            return True
-
-        except Exception:
-            return False
+        """Deprecated: no exchange API usage in CSV-only POC."""
+        return False
 
     def get_exchange_connection_summary(self) -> Dict[str, Dict[str, Any]]:
         """
@@ -629,11 +336,41 @@ class ConfigService:
                 "auto_sync_enabled": True,
                 "sync_interval_hours": 24,
                 "theme": "light",
+                "storage_backend": "parquet",
+                "confluence_options": [
+                    "Support/Resistance 1st Retest",
+                    "Trendline Breakout",
+                    "Trendline Retest",
+                    "1 Day EMA 12",
+                    "1 Day EMA 200",
+                    "1 Day QVWAP",
+                    "1 Day YVWAP",
+                    "AVWAP - Major Swing",
+                ],
                 "created_at": datetime.now().isoformat(),
                 "updated_at": datetime.now().isoformat(),
             }
             self._app_config = default_config
             self._save_app_config()
+        else:
+            # Ensure confluence options exist and include defaults
+            cfg = self.get_app_config()
+            base_defaults = [
+                "Support/Resistance 1st Retest",
+                "Trendline Breakout",
+                "Trendline Retest",
+                "1 Day EMA 12",
+                "1 Day EMA 200",
+                "1 Day QVWAP",
+                "1 Day YVWAP",
+                "AVWAP - Major Swing",
+            ]
+            existing = cfg.get("confluence_options", []) or []
+            merged = list(dict.fromkeys([*(str(o).strip() for o in existing if str(o).strip()), *base_defaults]))
+            if merged != existing:
+                cfg["confluence_options"] = merged
+                self._app_config = cfg
+                self._save_app_config()
 
         # Initialize default custom fields
         if not self.custom_fields_file.exists():

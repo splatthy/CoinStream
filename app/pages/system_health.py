@@ -282,21 +282,22 @@ def show_diagnostics_tab():
                     return
 
     with col2:
-        if st.button("📊 Quick Status Check", key="quick_status"):
+        if st.button("📊 Quick Status Check", key="quick_status_btn"):
             try:
                 quick_status = diagnostic_tool.get_quick_status()
-                st.session_state.quick_status = quick_status
+                st.session_state.quick_status_data = quick_status
                 get_notification_manager().info("Quick status check completed")
             except Exception as e:
                 st.error(f"Quick status check failed: {e}")
 
     # Display quick status if available
-    if hasattr(st.session_state, "quick_status"):
+    if hasattr(st.session_state, "quick_status_data"):
         st.subheader("Quick Status")
 
-        quick_status = st.session_state.quick_status
+        quick_status = st.session_state.quick_status_data
 
-        if "error" not in quick_status:
+        # Ensure quick_status is a mapping/dict before using it
+        if isinstance(quick_status, dict) and ("error" not in quick_status):
             col1, col2, col3, col4 = st.columns(4)
 
             with col1:
@@ -337,7 +338,11 @@ def show_diagnostics_tab():
                 error_status = "✅" if error_count == 0 else f"⚠️ {error_count}"
                 st.write(f"**Recent Errors:** {error_status}")
         else:
-            st.error(f"Quick status error: {quick_status['error']}")
+            # Handle non-dict or error responses gracefully
+            if isinstance(quick_status, dict) and "error" in quick_status:
+                st.error(f"Quick status error: {quick_status['error']}")
+            else:
+                st.error("Quick status unavailable or in unexpected format")
 
     # Display full diagnostics if available
     if hasattr(st.session_state, "diagnostics_results"):

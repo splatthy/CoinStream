@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 import streamlit as st
 
-from app.models.trade import Trade, TradeSide, TradeStatus, WinLoss
+from app.models.trade import Trade, TradeSide, TradeStatus
 from app.services.config_service import ConfigService
 from app.services.data_service import DataService
 from app.utils.notifications import get_notification_manager
@@ -148,12 +148,8 @@ def render_trade_statistics(trades: List[Trade]) -> None:
     total_pnl = sum(t.pnl for t in trades_with_pnl) if trades_with_pnl else 0
     profitable_trades = len([t for t in trades_with_pnl if t.pnl > 0])
 
-    # Win/Loss statistics
-    winning_trades = len([t for t in trades if t.win_loss == WinLoss.WIN])
-    losing_trades = len([t for t in trades if t.win_loss == WinLoss.LOSS])
-
     # Display statistics
-    col1, col2, col3, col4, col5 = st.columns(5)
+    col1, col2, col3, col4 = st.columns(4)
 
     with col1:
         st.metric("Total Trades", total_trades)
@@ -171,12 +167,6 @@ def render_trade_statistics(trades: List[Trade]) -> None:
         else:
             st.metric("Win Rate (PnL)", "N/A")
 
-    with col5:
-        if winning_trades + losing_trades > 0:
-            manual_win_rate = (winning_trades / (winning_trades + losing_trades)) * 100
-            st.metric("Win Rate (Manual)", f"{manual_win_rate:.1f}%")
-        else:
-            st.metric("Win Rate (Manual)", "N/A")
 
     # Total PnL
     if trades_with_pnl:
@@ -224,15 +214,6 @@ def render_trade_table(
             else "⚪"
         )
 
-        # Format win/loss
-        win_loss_display = ""
-        if trade.win_loss == WinLoss.WIN:
-            win_loss_display = "✅ Win"
-        elif trade.win_loss == WinLoss.LOSS:
-            win_loss_display = "❌ Loss"
-        else:
-            win_loss_display = "⚪ N/A"
-
         # Format confluences
         confluences_display = (
             ", ".join(trade.confluences) if trade.confluences else "None"
@@ -254,7 +235,6 @@ def render_trade_table(
                 "Exit Price": f"${trade.exit_price:.4f}" if trade.exit_price else "N/A",
                 "Quantity": f"{trade.quantity:.4f}",
                 "PnL": f"{pnl_color} {pnl_display}",
-                "Win/Loss": win_loss_display,
                 "Confluences": confluences_display,
                 "Entry Time": trade.entry_time.strftime("%Y-%m-%d %H:%M"),
                 "Exit Time": trade.exit_time.strftime("%Y-%m-%d %H:%M")
@@ -273,7 +253,61 @@ def render_trade_table(
         render_bulk_edit_interface(trades, data_service, config_service)
         return
 
-    # Display table with selection
+    # Inline confluences edit toggle
+    inline_edit = st.toggle("Inline Edit Confluences", key="inline_edit_confluences")
+    if inline_edit:
+        try:
+            confluence_options = config_service.get_confluence_options()
+        except Exception:
+            confluence_options = []
+
+        edit_rows = []
+        for t in trades:
+            edit_rows.append(
+                {
+                    "ID": t.id,
+                    "Exchange": t.exchange.title(),
+                    "Symbol": t.symbol,
+                    "Side": t.side.value.title(),
+                    "Status": t.status.value.title(),
+                    "Confluences": t.confluences or [],
+                }
+            )
+
+        editor = st.data_editor(
+            pd.DataFrame(edit_rows),
+            column_config={
+                "Confluences": st.column_config.MultiselectColumn(
+                    "Confluences", options=confluence_options
+                )
+            },
+            disabled=["ID", "Exchange", "Symbol", "Side", "Status"],
+            use_container_width=True,
+            key="confluence_editor",
+        )
+
+        if st.button("Save Confluence Changes", type="primary"):
+            try:
+                id_to_confluences = {
+                    row["ID"]: row["Confluences"] if isinstance(row["Confluences"], list) else []
+                    for _, row in editor.iterrows()
+                }
+                updated = 0
+                for t in trades:
+                    new_vals = id_to_confluences.get(t.id, t.confluences)
+                    if new_vals != t.confluences:
+                        data_service.update_trade(t.id, {"confluences": new_vals})
+                        updated += 1
+                if updated:
+                    get_notification_manager().success(f"Updated confluences for {updated} trades")
+                    st.rerun()
+                else:
+                    st.info("No changes detected")
+            except Exception as e:
+                st.error(f"Failed to save changes: {e}")
+        return
+
+    # Display table with selection (view-only)
     display_df = df.drop(columns=["_trade_obj", "_index", "Select"])
 
     selected_indices = st.dataframe(
@@ -368,18 +402,6 @@ def render_bulk_edit_interface(
                         help="Confluences to add, replace, or remove",
                     )
 
-                # Win/Loss operations
-                win_loss_action = st.selectbox(
-                    "Win/Loss Action",
-                    options=[
-                        "No Change",
-                        "Set to Win",
-                        "Set to Loss",
-                        "Clear Win/Loss",
-                    ],
-                    help="Choose how to modify win/loss classification",
-                )
-
                 # Submit bulk changes
                 col1, col2 = st.columns(2)
 
@@ -393,30 +415,16 @@ def render_bulk_edit_interface(
 
                 if preview:
                     st.write("**Preview of changes:**")
-                    preview_changes(
-                        selected_trades,
-                        confluence_action,
-                        confluence_values,
-                        win_loss_action,
-                    )
+                    preview_changes(selected_trades, confluence_action, confluence_values)
 
                 if submitted:
-                    apply_bulk_changes(
-                        selected_trades,
-                        data_service,
-                        confluence_action,
-                        confluence_values,
-                        win_loss_action,
-                    )
+                    apply_bulk_changes(selected_trades, data_service, confluence_action, confluence_values)
         else:
             st.info("Select trades to enable bulk editing options.")
 
 
 def preview_changes(
-    trades: List[Trade],
-    confluence_action: str,
-    confluence_values: List[str],
-    win_loss_action: str,
+    trades: List[Trade], confluence_action: str, confluence_values: List[str]
 ) -> None:
     """Preview bulk changes before applying."""
     changes_summary = []
@@ -426,8 +434,6 @@ def preview_changes(
             f"**Confluences:** {confluence_action} - {', '.join(confluence_values) if confluence_values else 'None'}"
         )
 
-    if win_loss_action != "No Change":
-        changes_summary.append(f"**Win/Loss:** {win_loss_action}")
 
     if changes_summary:
         st.write(f"Will apply the following changes to {len(trades)} trades:")
@@ -442,7 +448,6 @@ def apply_bulk_changes(
     data_service: DataService,
     confluence_action: str,
     confluence_values: List[str],
-    win_loss_action: str,
 ) -> None:
     """Apply bulk changes to selected trades."""
     try:
@@ -467,14 +472,6 @@ def apply_bulk_changes(
                         c for c in trade.confluences if c not in confluence_values
                     ]
                     updates["confluences"] = new_confluences
-
-                # Handle win/loss changes
-                if win_loss_action == "Set to Win":
-                    updates["win_loss"] = "win"
-                elif win_loss_action == "Set to Loss":
-                    updates["win_loss"] = "loss"
-                elif win_loss_action == "Clear Win/Loss":
-                    updates["win_loss"] = None
 
                 # Apply updates if any
                 if updates:
@@ -568,9 +565,6 @@ def render_trade_detail_view(trade: Trade) -> None:
             st.write(f"**Exit Time:** {trade.exit_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
         st.write("**Analysis**")
-        if trade.win_loss:
-            win_loss_display = "✅ Win" if trade.win_loss == WinLoss.WIN else "❌ Loss"
-            st.write(f"**Outcome:** {win_loss_display}")
 
         if trade.confluences:
             st.write("**Confluences:**")
@@ -635,29 +629,7 @@ def render_trade_edit_form(
             ):
                 st.rerun()
 
-        # Win/Loss selection with validation
-        st.write("**Trade Outcome**")
-        win_loss_options = [("", "Not Set"), ("win", "✅ Win"), ("loss", "❌ Loss")]
-
-        current_win_loss = trade.win_loss.value if trade.win_loss else ""
-        current_index = next(
-            (
-                i
-                for i, (value, _) in enumerate(win_loss_options)
-                if value == current_win_loss
-            ),
-            0,
-        )
-
-        selected_win_loss_index = st.selectbox(
-            "Win/Loss Classification",
-            options=range(len(win_loss_options)),
-            format_func=lambda x: win_loss_options[x][1],
-            index=current_index,
-            help="Classify this trade as a win or loss for manual analysis. This is separate from PnL calculations.",
-        )
-
-        selected_win_loss = win_loss_options[selected_win_loss_index][0]
+        # No manual win/loss selection in MVP; outcome derived from PnL
 
         # Custom fields section
         st.subheader("Custom Fields")
@@ -755,11 +727,6 @@ def render_trade_edit_form(
                 "⚠️ No confluences selected - this trade won't appear in confluence analysis"
             )
 
-        if not selected_win_loss:
-            validation_warnings.append(
-                "⚠️ Win/Loss not set - this trade won't be included in manual win rate calculations"
-            )
-
         if validation_warnings:
             st.warning("Validation Notes:")
             for warning in validation_warnings:
@@ -787,12 +754,6 @@ def render_trade_edit_form(
                 updates = {
                     "confluences": selected_confluences,
                 }
-
-                # Handle win/loss
-                if selected_win_loss:
-                    updates["win_loss"] = selected_win_loss
-                else:
-                    updates["win_loss"] = None
 
                 # Add custom field updates
                 if custom_field_updates:
@@ -828,11 +789,7 @@ def render_trade_edit_form(
                         f"Confluences: {len(updates.get('confluences', []))} selected"
                     )
 
-                if updates.get("win_loss") != (
-                    trade.win_loss.value if trade.win_loss else None
-                ):
-                    new_wl = updates.get("win_loss", "Not Set")
-                    changes_made.append(f"Win/Loss: {new_wl}")
+                # No win/loss change tracking
 
                 if "custom_fields" in updates:
                     field_count = len(updates["custom_fields"])
@@ -867,11 +824,7 @@ def validate_trade_updates(updates: Dict[str, Any]) -> bool:
             if not all(isinstance(c, str) for c in confluences):
                 return False
 
-        # Validate win_loss
-        if "win_loss" in updates:
-            win_loss = updates["win_loss"]
-            if win_loss is not None and win_loss not in ["win", "loss"]:
-                return False
+        # No manual win/loss validation in MVP
 
         # Validate custom_fields
         if "custom_fields" in updates:
