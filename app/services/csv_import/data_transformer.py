@@ -16,6 +16,47 @@ from app.utils.validators import ValidationError
 class DataTransformer:
     """Transforms CSV rows into Trade model instances."""
 
+    def _parse_futures(self, value: str):
+        """Parse Bitunix futures field like 'ETHUSDT Long·CROSS' into (symbol, side, margin_mode)."""
+        if value is None:
+            raise ValidationError("Futures field is required")
+        s = str(value).strip()
+        parts = s.split(" ", 1)
+        symbol = parts[0].strip().upper() if parts else ""
+        rest = parts[1] if len(parts) > 1 else ""
+        side = None
+        margin = None
+        if rest:
+            if "·" in rest:
+                side_str, margin_str = rest.split("·", 1)
+                side = side_str.strip()
+                margin = margin_str.strip().upper()
+            else:
+                side = rest.strip()
+        if not side:
+            rl = s.lower()
+            if "long" in rl:
+                side = "Long"
+            elif "short" in rl:
+                side = "Short"
+        if not symbol or not side:
+            raise ValidationError(f"Unparseable futures field: {value}")
+        side_enum = self.normalize_trade_side(side)
+        return symbol, side_enum, margin
+
+    def _parse_closed_amount(self, value: Optional[str]) -> (Decimal, Optional[str]):
+        """Parse '351 TIA' into (Decimal('351'), 'TIA')."""
+        if value is None or str(value).strip() == "":
+            raise ValidationError("Missing closed amount")
+        text = str(value).strip()
+        import re
+        m = re.match(r"\s*([-+]?\d*\.?\d+)\s*([A-Za-z0-9_-]+)?", text)
+        if not m:
+            raise ValidationError(f"Invalid closed amount: {value}")
+        qty = Decimal(m.group(1))
+        asset = m.group(2) if m.lastindex and m.group(2) else None
+        return qty, asset
+
     def normalize_trade_side(self, side_value: str) -> TradeSide:
         if side_value is None:
             raise ValidationError("Trade side is required")
@@ -96,10 +137,19 @@ class DataTransformer:
 
     def transform_row(self, row: pd.Series, mapping: ColumnMapping, exchange: str) -> Trade:
         """Transform a single CSV row into a Trade object based on mapping and exchange name."""
-        # Required logical fields
-        symbol = str(row.get(mapping.symbol)).strip().upper()
-        side = self.normalize_trade_side(row.get(mapping.side))
-        quantity = self.parse_decimal(row.get(mapping.quantity), "quantity", required=True)
+        # Required logical fields (support composite Bitunix fields)
+        if mapping.symbol == mapping.side and mapping.symbol in row:
+            symbol, side, margin_mode = self._parse_futures(row.get(mapping.symbol))
+        else:
+            symbol = str(row.get(mapping.symbol)).strip().upper()
+            side = self.normalize_trade_side(row.get(mapping.side))
+
+        # Quantity may be composite (e.g., '351 TIA')
+        qval = row.get(mapping.quantity)
+        try:
+            quantity = self.parse_decimal(qval, "quantity", required=True)
+        except ValidationError:
+            quantity, asset = self._parse_closed_amount(qval)
         entry_price = self.parse_decimal(row.get(mapping.entry_price), "entry_price", required=True)
         entry_time = self.parse_timestamp(row.get(mapping.entry_time), required=True)
 
@@ -119,12 +169,48 @@ class DataTransformer:
         # Deterministic ID
         trade_id = self.generate_trade_id(symbol, entry_time, quantity, entry_price)
 
-        # Custom fields (fees as string to preserve JSON serialization compatibility)
+        # Custom fields. Fee normalization policy:
+        # Always persist a single total fee field: custom_fields['fees'] (stringified Decimal).
+        # For exchanges with multiple fee components (e.g., Bitunix funding/position), we sum them.
+        # Future exchange importers should adhere to this: compute total, store only 'fees'.
         custom_fields: Dict[str, str] = {}
-        if mapping.fees:
+
+        # 1) Start with explicit 'Fees' column if template provides it
+        fees_total = Decimal("0")
+        if mapping.fees and mapping.fees in row:
             fees_val = row.get(mapping.fees)
             if fees_val is not None and str(fees_val).strip() != "":
-                custom_fields["fees"] = str(fees_val)
+                try:
+                    fees_total += Decimal(str(fees_val))
+                except Exception:
+                    # Ignore non-numeric fee values
+                    pass
+
+        # 2) Add Bitunix new-format components if present
+        funding_fees = row.get("funding fees") if "funding fees" in row else row.get("Funding Fees")
+        position_fee = row.get("position fee") if "position fee" in row else row.get("Position Fee")
+        try:
+            if funding_fees not in (None, ""):
+                fees_total += Decimal(str(funding_fees))
+        except Exception:
+            pass
+        try:
+            if position_fee not in (None, ""):
+                fees_total += Decimal(str(position_fee))
+        except Exception:
+            pass
+
+        if fees_total != Decimal("0"):
+            custom_fields["fees"] = str(fees_total)
+
+        # Attach margin mode from futures if available
+        if mapping.symbol == mapping.side and mapping.symbol in row:
+            try:
+                _, _, margin_mode = self._parse_futures(row.get(mapping.symbol))
+                if margin_mode:
+                    custom_fields["margin_mode"] = margin_mode
+            except Exception:
+                pass
 
         # Build Trade
         trade = Trade(
@@ -143,4 +229,3 @@ class DataTransformer:
             custom_fields=custom_fields,
         )
         return trade
-

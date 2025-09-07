@@ -230,3 +230,12 @@
   - [ ] P1.4 Import cancellation control in UI
   - [ ] P1.5 Performance tests with large CSV files
   - [ ] P1.6 UI tests for upload, mapping preview, navigation, session state
+  - [ ] P1.7 Portfolio Size & Risk Framework (planning)
+    - Capture user-defined portfolio size (config) and desired risk %
+    - Show suggested max risk per trade; lay groundwork for RR metrics
+    - Plan time-series portfolio curve and risk evolution over time
+    - Decide where to surface (Config panel + analytics cards)
+  - [ ] P1.8 Partial-close reconciliation and dedupe strategy
+    - Research exchange export semantics for partial vs. full closes
+    - Propose grouping/merge rules across multiple closes (same symbol/opening time)
+    - Add tolerant duplicate keys (e.g., rounded price/qty) if exchange rounding shifts

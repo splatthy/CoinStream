@@ -132,14 +132,29 @@ def handle_import_workflow():
             mapping_rows = []
             for field, csv_col in mapping.as_dict().items():
                 required = field in mapping.required_fields()
-                status = "✅" if (csv_col and csv_col in df_headers) else ("❌" if required else "⚠️")
+                status = ""
+                notes = ""
+                if csv_col and csv_col in df_headers:
+                    status = "✅"
+                else:
+                    if field == "fees":
+                        # Fees are derived (we compute a total) when not mapped
+                        status = "🧮 Derived"
+                        notes = "Total fees will be calculated and stored as 'fees'"
+                    else:
+                        status = "❌" if required else "⚠️"
                 mapping_rows.append({
                     "Field": field,
                     "CSV Column": csv_col or "(not mapped)",
                     "Required": "Yes" if required else "No",
                     "Status": status,
+                    "Notes": notes,
                 })
-            st.dataframe(mapping_rows, use_container_width=True, hide_index=True)
+            st.dataframe(
+                mapping_rows,
+                use_container_width=True,
+                hide_index=True,
+            )
         except Exception as e:
             st.error(f"Failed to load mapping preview: {e}")
 

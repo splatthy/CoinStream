@@ -83,8 +83,46 @@ class ColumnMapper:
         """
         headers_norm = [h.strip() for h in csv_headers]
         if exchange_name:
+            # Special handling for Bitunix variants
+            if exchange_name.lower() == "bitunix":
+                lower_set = {h.lower() for h in headers_norm}
+                # New export format uses these headers
+                if {
+                    "futures",
+                    "opening time",
+                    "average entry price",
+                    "average closing price",
+                    "closed amount",
+                    "realized pnl",
+                    "closed time",
+                }.issubset(lower_set):
+                    # Construct mapping for new format (composite parsing handled in transformer)
+                    def find(col: str) -> str:
+                        # return the original header matching lower name
+                        for h in headers_norm:
+                            if h.lower() == col:
+                                return h
+                        return col
+
+                    mapping = ColumnMapping(
+                        symbol=find("futures"),
+                        side=find("futures"),
+                        quantity=find("closed amount"),
+                        entry_price=find("average entry price"),
+                        exit_price=find("average closing price"),
+                        entry_time=find("opening time"),
+                        exit_time=find("closed time"),
+                        pnl=find("realized pnl"),
+                        fees=None,
+                        name="Bitunix (New Export)",
+                        description="Bitunix export with composite futures/closed amount columns",
+                    )
+                    # Validate required presence (composite columns are present)
+                    mapping.validate_against_headers(headers_norm)
+                    return mapping
+
+            # Default: load template (cleaned mapping)
             mapping = self.load_template(exchange_name)
-            # Validate headers against template strictly for MVP
             mapping.validate_against_headers(headers_norm)
             return mapping
 

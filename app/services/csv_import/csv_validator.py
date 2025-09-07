@@ -96,7 +96,36 @@ class CSVValidator:
 
         qty_col = getattr(mapping, "quantity", None)
         if qty_col in df.columns:
-            _check_positive_decimal(df[qty_col], "quantity", required=True)
+            series = df[qty_col]
+            # Special case: Bitunix new format uses strings like "351 TIA"
+            def coerce_numeric(val):
+                if val is None or (isinstance(val, str) and val.strip() == ""):
+                    return None
+                try:
+                    return float(str(val))
+                except Exception:
+                    import re
+                    m = re.match(r"\s*([-+]?\d*\.?\d+)", str(val))
+                    if m:
+                        try:
+                            return float(m.group(1))
+                        except Exception:
+                            return None
+                    return None
+            for idx, val in series.items():
+                num = coerce_numeric(val)
+                if num is None:
+                    errors.append(
+                        ValidationError(
+                            f"Missing or invalid numeric 'quantity' in row {idx + 1}: '{val}'"
+                        )
+                    )
+                elif num <= 0:
+                    errors.append(
+                        ValidationError(
+                            f"quantity must be positive in row {idx + 1}: '{val}'"
+                        )
+                    )
 
         entry_price_col = getattr(mapping, "entry_price", None)
         if entry_price_col in df.columns:
@@ -149,17 +178,19 @@ class CSVValidator:
             valid = {"long", "short"}
             for idx, val in df[side_col].items():
                 if val is None or str(val).strip() == "":
-                    errors.append(
-                        ValidationError(f"Missing required side in row {idx + 1}")
-                    )
+                    errors.append(ValidationError(f"Missing required side in row {idx + 1}"))
                     continue
                 sval = str(val).strip().lower()
-                if sval not in valid:
-                    errors.append(
-                        ValidationError(
-                            f"Invalid side in row {idx + 1}: '{val}' (expected Long/Short)"
-                        )
+                # Allow composite futures like "ETHUSDT Long·CROSS"
+                if sval in valid:
+                    continue
+                if ("long" in sval) or ("short" in sval):
+                    continue
+                errors.append(
+                    ValidationError(
+                        f"Invalid side in row {idx + 1}: '{val}' (expected Long/Short)"
                     )
+                )
 
         return ValidationResult(is_valid=len(errors) == 0, errors=errors)
 
@@ -177,4 +208,3 @@ class CSVValidator:
         keys = pd.Series(zip(df[symbol_col].astype(str).str.strip().str.upper(), times))
         dup_mask = keys.duplicated(keep="first")
         return [int(i) for i, is_dup in enumerate(dup_mask) if bool(is_dup)]
-
