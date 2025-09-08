@@ -98,15 +98,22 @@ class ImportResult:
     imported_trades: int
     skipped_rows: int
     duplicate_trades: int
+    # Tx-history specific metric: number of in-progress positions skipped
+    open_positions_skipped: int = 0
     errors: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     processing_time: float = 0.0
 
     def get_summary(self) -> str:
-        return (
-            f"Success: {self.success} | Rows: {self.total_rows} | "
-            f"Imported: {self.imported_trades} | Skipped: {self.skipped_rows} | "
-            f"Duplicates: {self.duplicate_trades} | Errors: {len(self.errors)} | "
-            f"Warnings: {len(self.warnings)} | Time: {self.processing_time:.2f}s"
-        )
-
+        parts = [
+            f"Success: {self.success}",
+            f"Rows: {self.total_rows}",
+            f"Imported (Closed): {self.imported_trades}",
+            f"Open Skipped: {self.open_positions_skipped}",
+            f"Skipped (Total): {self.skipped_rows}",
+            f"Duplicates: {self.duplicate_trades}",
+            f"Errors: {len(self.errors)}",
+            f"Warnings: {len(self.warnings)}",
+            f"Time: {self.processing_time:.2f}s",
+        ]
+        return " | ".join(parts)

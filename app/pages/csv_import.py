@@ -12,6 +12,7 @@ import streamlit as st
 
 from app.services.csv_import.csv_import_service import CSVImportService
 from app.services.data_service import DataService
+from app.services.config_service import ConfigService
 
 
 PAGE_KEY = "csv_import_state"
@@ -23,8 +24,9 @@ def _get_services() -> Dict[str, Any]:
         st.error("Services not initialized. Please refresh the page.")
         st.stop()
     data_service: DataService = app_state.data_service
-    import_service = CSVImportService(data_service)
-    return {"data_service": data_service, "import_service": import_service}
+    config_service: ConfigService = app_state.config_service
+    import_service = CSVImportService(data_service, config_service)
+    return {"data_service": data_service, "config_service": config_service, "import_service": import_service}
 
 
 def _init_state() -> None:
@@ -86,6 +88,10 @@ def handle_import_workflow():
     import_service: CSVImportService = services["import_service"]
 
     state = st.session_state[PAGE_KEY]
+    st.info(
+        "This importer now uses Transaction/Order History (fills) as the source of truth. "
+        "Position History imports have been removed. If you previously imported Position History, consider backing up and re-importing using fills."
+    )
     step = 1
 
     st.subheader("Step 1 of 5: Upload CSV File")
@@ -102,61 +108,37 @@ def handle_import_workflow():
     if not file_path:
         return
 
-    # Step 2: Select exchange
+    # Step 2: Source Detection (tx-history only)
     step = 2
-    st.subheader("Step 2 of 5: Select Exchange")
+    st.subheader("Step 2 of 5: Source Detection")
     _render_step_indicator(step)
-    exchange = st.selectbox("Exchange", options=["bitunix"], index=0, help="Select the exchange that produced this CSV")
-    if st.button("Confirm Exchange"):
-        _set_state(selected_exchange=exchange, validation=None, preview=None, import_result=None)
+    from app.services.csv_import.csv_parser import CSVParser
+    from app.services.csv_import.tx_history.router import detect_tx_history
+
+    try:
+        headers = list(CSVParser().parse_csv_file(file_path).columns)
+        detected = detect_tx_history(headers)
+    except Exception as e:
+        detected = None
+
+    if not detected:
+        st.error("Unsupported CSV format. This importer now only supports Transaction/Order History (fills) for Bitunix/Blofin.")
+        st.info("Please export the appropriate order/transaction history CSV from your exchange and try again.")
+        return
+
+    st.success(f"Detected tx-history format: {detected}")
+    account_label = st.text_input(
+        "Account Label (optional)",
+        value=state.get("account_label") or "",
+        help="If you manage multiple accounts on the same exchange, label this import to keep audit and incremental windows separate.",
+    )
+    if st.button("Confirm Source"):
+        _set_state(selected_exchange=detected.lower(), account_label=(account_label.strip() or None), validation=None, preview=None, import_result=None)
         st.rerun()
 
     selected_exchange = state["selected_exchange"]
     if not selected_exchange:
         return
-
-    # Mapping preview (read-only)
-    with st.expander("Show Mapping for Selected Exchange", expanded=True):
-        try:
-            # Parse headers to build mapping preview
-            from app.services.csv_import.csv_parser import CSVParser
-            from app.services.csv_import.column_mapper import ColumnMapper
-            from app.services.csv_import.models import ColumnMapping
-
-            parser = CSVParser()
-            df_headers = list(parser.parse_csv_file(file_path).columns)
-            mapper = ColumnMapper()
-            mapping = mapper.create_mapping(df_headers, exchange_name=selected_exchange)
-
-            # Build a preview table of logical field -> CSV header
-            mapping_rows = []
-            for field, csv_col in mapping.as_dict().items():
-                required = field in mapping.required_fields()
-                status = ""
-                notes = ""
-                if csv_col and csv_col in df_headers:
-                    status = "✅"
-                else:
-                    if field == "fees":
-                        # Fees are derived (we compute a total) when not mapped
-                        status = "🧮 Derived"
-                        notes = "Total fees will be calculated and stored as 'fees'"
-                    else:
-                        status = "❌" if required else "⚠️"
-                mapping_rows.append({
-                    "Field": field,
-                    "CSV Column": csv_col or "(not mapped)",
-                    "Required": "Yes" if required else "No",
-                    "Status": status,
-                    "Notes": notes,
-                })
-            st.dataframe(
-                mapping_rows,
-                use_container_width=True,
-                hide_index=True,
-            )
-        except Exception as e:
-            st.error(f"Failed to load mapping preview: {e}")
 
     # Step 3: Validate
     step = 3
@@ -187,8 +169,35 @@ def handle_import_workflow():
     st.subheader("Step 4 of 5: Preview Data")
     _render_step_indicator(step)
 
+    # Preview mode selection (T9)
+    preview_mode = st.radio(
+        "Preview Mode",
+        options=["Reconstructed Positions", "Raw Fills"],
+        index=0,
+        horizontal=True,
+        help="Reconstructed Positions shows closed/open positions; Raw Fills shows the normalized fills.",
+    )
+
+    # Compute risk estimate to display in preview for breach context
+    try:
+        cfg = _get_services()["config_service"].get_app_config() or {}
+        ps = cfg.get("portfolio_size")
+        rp = cfg.get("risk_percent")
+        risk_estimate = None
+        if ps is not None and rp is not None:
+            from decimal import Decimal
+            risk_estimate = Decimal(str(ps)) * (Decimal(str(rp)) / Decimal("100"))
+    except Exception:
+        risk_estimate = None
+
     if st.button("Generate Preview"):
-        preview_rows = import_service.preview_csv_data(file_path, selected_exchange, rows=10)
+        preview_rows = import_service.preview_csv_data(
+            file_path,
+            selected_exchange,
+            rows=10,
+            preview_mode=("raw" if preview_mode == "Raw Fills" else "reconstructed"),
+            risk_estimate=risk_estimate,
+        )
         _set_state(preview=preview_rows)
         st.rerun()
 
@@ -204,6 +213,18 @@ def handle_import_workflow():
             for r in ok_rows:
                 src = r.get("pnl_source")
                 src_disp = "📝 Provided" if src == "provided" else ("🧮 Calculated" if src == "calculated" else "—")
+                # Risk display and breach logic (when available in preview or computed)
+                max_risk = r.get("max_risk_per_trade") or (str(risk_estimate) if risk_estimate is not None else "")
+                breach = ""
+                try:
+                    if r.get("status") == "closed" and r.get("pnl") not in (None, "") and max_risk:
+                        from decimal import Decimal
+                        pnl_val = Decimal(str(r.get("pnl")))
+                        if pnl_val < 0 and abs(pnl_val) > Decimal(str(max_risk)):
+                            breach = "⚠️ Breach"
+                except Exception:
+                    breach = ""
+
                 table_rows.append({
                     "Row": f"{r.get('row_status_icon', '✅')}",
                     "Symbol": r.get("symbol"),
@@ -213,12 +234,14 @@ def handle_import_workflow():
                     "Exit": r.get("exit_price") or "",
                     "PnL": r.get("pnl") or "",
                     "PnL Source": src_disp,
+                    "Max Risk": max_risk or "",
+                    "Risk": breach,
                     "Entry Time": r.get("entry_time"),
                     "Exit Time": r.get("exit_time") or "",
                     "Trade Status": r.get("status"),
                     "Notes": r.get("notes") or "",
                 })
-            st.dataframe(table_rows, use_container_width=True, hide_index=True)
+            st.dataframe(table_rows, width="stretch", hide_index=True)
 
             with st.expander("Row details (JSON)"):
                 st.json(ok_rows)
@@ -240,7 +263,56 @@ def handle_import_workflow():
         st.write("Review before importing:")
         st.write(f"• File: {file_info.get('name', '(unknown)')} ({file_info.get('size', 0)} bytes)")
         st.write(f"• Exchange: {selected_exchange}")
+        if state.get("account_label"):
+            st.write(f"• Account Label: {state.get('account_label')}")
         st.write(f"• Estimated rows: {est_rows}")
+        # Incremental window suggestion
+        try:
+            from app.services.csv_import.tx_history.import_log import ImportLogStore
+            services = _get_services()
+            data_service = services["data_service"]
+            log = ImportLogStore(str(data_service.data_path))
+            last_time = log.get_last_import_time(
+                exchange=selected_exchange.title(),
+                account_label=state.get("account_label")
+            )
+        except Exception:
+            last_time = None
+
+        use_filter = st.checkbox("Use time filter (import fills after a date)", value=bool(last_time is not None), help="When enabled, only fills with time greater than the selected date are imported.")
+        start_time_after = None
+        if use_filter:
+            default_dt = last_time
+            # Prefer datetime_input when available, else fallback to date+time inputs
+            if hasattr(st, "datetime_input"):
+                dt_val = st.datetime_input(
+                    "Start importing after (UTC)",
+                    value=default_dt,
+                    help="Default is the last import time for this exchange/account, if available.",
+                    key="tx_history_start_time_after",
+                )
+                if dt_val is not None:
+                    start_time_after = dt_val.isoformat()
+            else:
+                import datetime as _dt
+                date_val = st.date_input(
+                    "Start date (UTC)",
+                    value=(default_dt.date() if default_dt else _dt.datetime.utcnow().date()),
+                    key="tx_history_start_date",
+                    help="Default is the last import date for this exchange/account, if available.",
+                )
+                time_val = st.time_input(
+                    "Start time (UTC)",
+                    value=(default_dt.time() if default_dt else _dt.time(0, 0, 0)),
+                    key="tx_history_start_time",
+                    help="Set time after which fills will be imported.",
+                )
+                try:
+                    dt_combined = _dt.datetime.combine(date_val, time_val)
+                    start_time_after = dt_combined.isoformat()
+                except Exception:
+                    start_time_after = None
+        _set_state(start_time_after=start_time_after)
         confirm = st.checkbox("I confirm I want to import these trades", key="confirm_import")
 
     if st.button("Start Import", type="primary", disabled=not st.session_state.get("confirm_import")):
@@ -253,7 +325,13 @@ def handle_import_workflow():
             status.text(f"Processing row {current} of {total}")
             return True
 
-        result = import_service.import_csv_file(file_path, selected_exchange, on_progress=on_progress)
+        result = import_service.import_csv_file(
+            file_path,
+            selected_exchange,
+            account_label=state.get("account_label"),
+            start_time_after=state.get("start_time_after"),
+            on_progress=on_progress,
+        )
         _set_state(import_result=result)
 
         # Clear cache so Trade History updates immediately

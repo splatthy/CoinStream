@@ -44,7 +44,9 @@ docker-compose --profile dev up -d trading-journal-dev
 ### Setup and Configuration
 - **[User Guide](USER_GUIDE.md)** - Complete guide to using the application
 - **[Deployment Guide](DEPLOYMENT.md)** - Detailed deployment instructions
-- **[Bitunix API Setup](BITUNIX_API_SETUP.md)** - Step-by-step API key configuration
+- CSV Import (Tx‑History) — MVP:
+  - **[Tx-History Import (User)](docs/tx_history_import.md)**
+  - **[Tx-History Developer Notes](docs/tx_history_dev.md)**
 
 ### Development and Features
 - **[Development Guide](DEVELOPMENT.md)** - Development environment setup and workflow
@@ -53,11 +55,11 @@ docker-compose --profile dev up -d trading-journal-dev
 
 ## ✨ Key Features
 
-### 🔄 Automated Data Management
-- **Exchange Integration**: Seamless API integration with Bitunix (more exchanges coming)
-- **Automatic Sync**: Incremental data synchronization with conflict resolution
-- **Data Persistence**: Secure local storage with backup/restore capabilities
-- **Real-time Updates**: Track partially closed positions and ongoing trades
+### 🔄 Data Ingestion
+- **CSV Tx-History Import (MVP)**: Ingest Bitunix/Blofin order/transaction history (fills), reconstruct positions, and persist closed trades
+- **Deduplication**: Tolerant dedupe across re-exports
+- **Incremental Imports**: Suggested start time based on audit log
+- **Data Persistence**: Secure local storage with Parquet backend
 
 ### 📊 Advanced Analytics
 - **Performance Trends**: Interactive time-series analysis with multiple timeframes
@@ -107,12 +109,11 @@ crypto-trading-journal/
 
 ## 📈 Supported Exchanges
 
-### Currently Supported
-- **Bitunix**: Full support for position history and trade data
+### CSV Tx-History (MVP)
+- **Bitunix**: futures-history CSV (fills)
+- **Blofin**: order history CSV (fills)
 
-### Coming Soon
-- Additional exchanges based on user demand
-- Plugin architecture for easy exchange additions
+Additional exchanges can be added by implementing detection + normalization; see Developer Notes.
 
 ## 🛠️ Development
 

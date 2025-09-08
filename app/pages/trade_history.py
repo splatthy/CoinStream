@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 import streamlit as st
 
-from app.models.trade import Trade, TradeSide, TradeStatus
+from app.models.trade import Trade, TradeSide, TradeStatus, WinLoss
 from app.services.config_service import ConfigService
 from app.services.data_service import DataService
 from app.utils.notifications import get_notification_manager
@@ -18,17 +18,31 @@ from app.utils.state_management import get_state_manager
 logger = logging.getLogger(__name__)
 
 
+def _get_services() -> Dict[str, Any]:
+    """Fetch initialized services, initializing via main.get_app_state() if needed."""
+    app_state = st.session_state.get("app_state")
+    if not app_state:
+        try:
+            # Ensure services are initialized when this page is run directly
+            from app.main import get_app_state  # lazy import to avoid circulars
+
+            app_state = get_app_state()
+        except Exception:
+            app_state = None
+    if not app_state or not getattr(app_state, "data_service", None):
+        st.error("Services not initialized. Please refresh the page.")
+        st.stop()
+    return {"data_service": app_state.data_service, "config_service": app_state.config_service}
+
+
 def render_trade_history_page():
     """Render the main trade history page."""
     st.title("📊 Trade History")
 
-    # Get services from session state
-    data_service = st.session_state.get("app_state").data_service
-    config_service = st.session_state.get("app_state").config_service
-
-    if not data_service or not config_service:
-        st.error("Services not initialized. Please refresh the page.")
-        return
+    # Get services (robust to direct page execution)
+    services = _get_services()
+    data_service: DataService = services["data_service"]
+    config_service: ConfigService = services["config_service"]
 
     # Load trades
     try:
@@ -221,6 +235,10 @@ def render_trade_table(
         if len(confluences_display) > 30:
             confluences_display = confluences_display[:27] + "..."
 
+        # Pull PnL source and fees if available
+        pnl_source = trade.custom_fields.get("pnl_source") if isinstance(trade.custom_fields, dict) else None
+        fees_val = trade.custom_fields.get("fees") if isinstance(trade.custom_fields, dict) else None
+
         trade_data.append(
             {
                 "Select": False
@@ -235,6 +253,8 @@ def render_trade_table(
                 "Exit Price": f"${trade.exit_price:.4f}" if trade.exit_price else "N/A",
                 "Quantity": f"{trade.quantity:.4f}",
                 "PnL": f"{pnl_color} {pnl_display}",
+                "PnL Source": pnl_source or "",
+                "Fees": (f"${float(fees_val):.2f}" if fees_val not in (None, "") else ""),
                 "Confluences": confluences_display,
                 "Entry Time": trade.entry_time.strftime("%Y-%m-%d %H:%M"),
                 "Exit Time": trade.exit_time.strftime("%Y-%m-%d %H:%M")
@@ -261,6 +281,32 @@ def render_trade_table(
         except Exception:
             confluence_options = []
 
+        # Ensure options include any existing values so the editor can render them
+        existing_values: List[str] = []
+        try:
+            for t in trades:
+                if t.confluences:
+                    for c in t.confluences:
+                        s = str(c).strip()
+                        if s:
+                            existing_values.append(s)
+        except Exception:
+            pass
+        # Deduplicate and merge
+        merged_options = sorted(list({*confluence_options, *existing_values}))
+        # Fallback to a benign placeholder if still empty
+        if not merged_options:
+            merged_options = ["(none)"]
+
+        # Allow choosing strict editing (restrict to configured options) vs freeform ListColumn
+        strict_mode = st.toggle(
+            "Restrict to configured options",
+            help=(
+                "When on, uses per-row multiselects limited to the configured option list.\n"
+                "When off, uses a spreadsheet-style editor (freeform lists) with validation on save."
+            ),
+        )
+
         edit_rows = []
         for t in trades:
             edit_rows.append(
@@ -274,24 +320,96 @@ def render_trade_table(
                 }
             )
 
-        editor = st.data_editor(
-            pd.DataFrame(edit_rows),
-            column_config={
-                "Confluences": st.column_config.MultiselectColumn(
-                    "Confluences", options=confluence_options
+        editor_df = None
+        # Prefer Data Editor ListColumn when available and not in strict mode
+        if not strict_mode and hasattr(st.column_config, "ListColumn"):
+            try:
+                editor_df = st.data_editor(
+                    pd.DataFrame(edit_rows),
+                    column_config={
+                        # Some Streamlit versions don't support an 'options' arg on ListColumn.
+                        # We will validate against merged_options on save instead.
+                        "Confluences": st.column_config.ListColumn(
+                            "Confluences", help="Select one or more confluences. Unknown entries will be ignored on save."
+                        ),
+                    },
+                    disabled=["ID", "Exchange", "Symbol", "Side", "Status"],
+                    width="stretch",
+                    key="confluence_editor",
                 )
-            },
-            disabled=["ID", "Exchange", "Symbol", "Side", "Status"],
-            use_container_width=True,
-            key="confluence_editor",
-        )
+            except Exception as e:
+                st.error(f"Failed to render inline editor: {e}")
+                st.stop()
+        else:
+            st.info(
+                "Using compatibility editor for current Streamlit version. "
+                "Edit confluences per row below and click Save."
+            )
+            # Manual per-row multiselects with PnL context
+            for t in trades:
+                # PnL snippet
+                pnl_str = ""
+                try:
+                    if t.pnl is not None:
+                        sign = "+" if t.pnl >= 0 else "-"
+                        pnl_str = f" | PnL: {sign}${abs(float(t.pnl)):.2f}"
+                except Exception:
+                    pnl_str = ""
+
+                # Exit time snippet
+                exit_str = f" → {t.exit_time.strftime('%Y-%m-%d %H:%M')}" if t.exit_time else ""
+
+                # Win/Loss badge (prefer explicit win_loss, fall back to pnl sign)
+                try:
+                    if t.win_loss == WinLoss.WIN or (t.win_loss is None and t.pnl is not None and t.pnl > 0):
+                        wl_badge = "🏆 Win"
+                    elif t.win_loss == WinLoss.LOSS or (t.win_loss is None and t.pnl is not None and t.pnl < 0):
+                        wl_badge = "🔻 Loss"
+                    else:
+                        wl_badge = "•"
+                except Exception:
+                    wl_badge = "•"
+
+                label = (
+                    f"{t.symbol} ({t.side.value.title()}) @ {t.entry_time.strftime('%Y-%m-%d %H:%M')}"
+                    f"{exit_str}{pnl_str} [{wl_badge}]"
+                )
+                st.multiselect(
+                    label,
+                    options=merged_options,
+                    default=t.confluences or [],
+                    key=f"conf_edit_{t.id}",
+                    help="Confluences for this trade",
+                )
 
         if st.button("Save Confluence Changes", type="primary"):
             try:
-                id_to_confluences = {
-                    row["ID"]: row["Confluences"] if isinstance(row["Confluences"], list) else []
-                    for _, row in editor.iterrows()
-                }
+                if editor_df is not None:
+                    id_to_confluences = {}
+                    dropped_count = 0
+                    for _, row in editor_df.iterrows():
+                        vals = row.get("Confluences", [])
+                        if not isinstance(vals, list):
+                            vals = [str(vals)] if vals else []
+                        # Validate against allowed options since ListColumn may not enforce options
+                        clean = []
+                        for v in vals:
+                            s = str(v).strip()
+                            if s in merged_options:
+                                clean.append(s)
+                            else:
+                                dropped_count += 1
+                        id_to_confluences[row["ID"]] = clean
+                else:
+                    # Gather from session_state for manual editor
+                    id_to_confluences = {}
+                    for t in trades:
+                        vals = st.session_state.get(f"conf_edit_{t.id}", [])
+                        # Ensure list[str]
+                        if not isinstance(vals, list):
+                            vals = [str(vals)] if vals else []
+                        # Validate selections against options
+                        id_to_confluences[t.id] = [str(v) for v in vals if str(v) in merged_options]
                 updated = 0
                 for t in trades:
                     new_vals = id_to_confluences.get(t.id, t.confluences)
@@ -300,6 +418,8 @@ def render_trade_table(
                         updated += 1
                 if updated:
                     get_notification_manager().success(f"Updated confluences for {updated} trades")
+                    if 'dropped_count' in locals() and dropped_count:
+                        st.warning(f"Ignored {dropped_count} unknown confluence value(s) not in configured options.")
                     st.rerun()
                 else:
                     st.info("No changes detected")
@@ -312,7 +432,7 @@ def render_trade_table(
 
     selected_indices = st.dataframe(
         display_df,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         selection_mode="single-row",
         on_select="rerun",
@@ -592,42 +712,17 @@ def render_trade_edit_form(
 ) -> None:
     """Render comprehensive trade editing form."""
     st.write("Edit trade analysis and custom data:")
-
-    # Get confluence options from config
-    try:
-        confluence_options = config_service.get_confluence_options()
-        if not confluence_options:
-            st.warning(
-                "No confluence options configured. Go to Configuration page to set up confluence options."
-            )
-            confluence_options = []
-    except Exception as e:
-        st.error(f"Failed to load confluence options: {e}")
-        confluence_options = []
+    st.info(
+        "Confluence editing is centralized in the Inline Editor above. "
+        "Use the toggle ‘Inline Edit Confluences’ to modify confluences across trades."
+    )
+    if st.button("Open Inline Confluence Editor"):
+        st.session_state["inline_edit_confluences"] = True
+        st.rerun()
 
     # Create form with validation
     with st.form(f"edit_trade_{trade.id}", clear_on_submit=False):
         st.subheader("Trading Analysis")
-
-        # Confluences multi-select with validation
-        col1, col2 = st.columns([2, 1])
-
-        with col1:
-            selected_confluences = st.multiselect(
-                "Trading Confluences",
-                options=confluence_options,
-                default=trade.confluences,
-                help="Select all confluences that applied to this trade. These will be used for performance analysis.",
-            )
-
-        with col2:
-            # Quick add confluence option
-            st.write("**Quick Actions**")
-            if st.button(
-                "🔄 Refresh Options",
-                help="Reload confluence options from configuration",
-            ):
-                st.rerun()
 
         # No manual win/loss selection in MVP; outcome derived from PnL
 
@@ -722,10 +817,7 @@ def render_trade_edit_form(
         # Show validation warnings
         validation_warnings = []
 
-        if not selected_confluences and confluence_options:
-            validation_warnings.append(
-                "⚠️ No confluences selected - this trade won't appear in confluence analysis"
-            )
+        # No confluence selection here; handled by Inline Editor
 
         if validation_warnings:
             st.warning("Validation Notes:")
@@ -750,10 +842,8 @@ def render_trade_edit_form(
 
         if submitted:
             try:
-                # Prepare updates dictionary
-                updates = {
-                    "confluences": selected_confluences,
-                }
+                # Prepare updates dictionary (no confluence updates here)
+                updates = {}
 
                 # Add custom field updates
                 if custom_field_updates:

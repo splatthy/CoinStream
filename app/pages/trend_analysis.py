@@ -370,7 +370,10 @@ def render_pnl_trend_chart(
             },
         }
 
-        st.plotly_chart(fig, use_container_width=True, config=config)
+        try:
+            st.plotly_chart(fig, width="stretch", config=config)
+        except TypeError:
+            st.plotly_chart(fig, use_container_width=True, config=config)
 
         # Chart export options
         render_chart_export_options(fig, df, timeframe)
@@ -526,7 +529,7 @@ def render_performance_breakdown(
             fig_hist.update_layout(height=450, showlegend=False, dragmode="zoom")
 
             st.plotly_chart(
-                fig_hist, use_container_width=True, config={"displayModeBar": True}
+                fig_hist, width="stretch", config={"displayModeBar": True}
             )
 
         with col2:
@@ -572,7 +575,7 @@ def render_performance_breakdown(
             )
 
             st.plotly_chart(
-                fig_trades, use_container_width=True, config={"displayModeBar": True}
+                fig_trades, width="stretch", config={"displayModeBar": True}
             )
 
         # Additional interactive analysis
@@ -615,7 +618,10 @@ def render_performance_breakdown(
                 )
 
             fig_scatter.update_layout(height=400, dragmode="zoom")
-            st.plotly_chart(fig_scatter, use_container_width=True)
+            try:
+                st.plotly_chart(fig_scatter, width="stretch")
+            except TypeError:
+                st.plotly_chart(fig_scatter, use_container_width=True)
 
         with col4:
             # Cumulative PnL growth rate
@@ -644,7 +650,10 @@ def render_performance_breakdown(
                     )
 
                     fig_growth.update_layout(height=400, dragmode="zoom")
-                    st.plotly_chart(fig_growth, use_container_width=True)
+                    try:
+                        st.plotly_chart(fig_growth, width="stretch")
+                    except TypeError:
+                        st.plotly_chart(fig_growth, use_container_width=True)
 
     except Exception as e:
         logger.error(f"Error rendering performance breakdown: {e}")
@@ -867,7 +876,7 @@ def render_performance_table(
         # Display the table with enhanced styling
         st.dataframe(
             paginated_df,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config={
                 "Date": st.column_config.DateColumn("Date"),

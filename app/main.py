@@ -168,7 +168,7 @@ def render_sidebar_navigation() -> str:
         "Configuration": "config",
     }
 
-    selected_page = st.sidebar.selectbox(
+    selected_page = st.sidebar.radio(
         "Navigate to:", options=list(pages.keys()), key="page_selector"
     )
 

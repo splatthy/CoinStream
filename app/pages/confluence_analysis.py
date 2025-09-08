@@ -244,7 +244,7 @@ def render_confluence_performance_chart(
         if len(confluences) > 5:
             fig.update_xaxes(tickangle=45)
 
-        st.plotly_chart(fig, use_container_width=True)
+        _show_chart(fig)
 
     except Exception as e:
         logger.error(f"Error rendering confluence performance chart: {e}")
@@ -279,7 +279,7 @@ def render_confluence_metrics_table(metrics: List[ConfluenceMetrics]) -> None:
         # Display with enhanced styling
         st.dataframe(
             df,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config={
                 "Confluence": st.column_config.TextColumn("Confluence", width="medium"),
@@ -493,7 +493,7 @@ def render_confluence_performance_pie(
             showlegend=True,
         )
 
-        st.plotly_chart(fig, use_container_width=True)
+        _show_chart(fig)
 
     except Exception as e:
         logger.error(f"Error rendering confluence performance pie: {e}")
@@ -1040,3 +1040,8 @@ def generate_confluence_summary_report(metrics: List[ConfluenceMetrics]) -> str:
 
 # Execute the main page function directly (Streamlit multipage approach)
 show_confluence_analysis_page()
+def _show_chart(fig):
+    try:
+        st.plotly_chart(fig, width="stretch")
+    except TypeError:
+        st.plotly_chart(fig, use_container_width=True)

@@ -3,8 +3,8 @@
 ## Table of Contents
 
 1. [Getting Started](#getting-started)
-2. [Application Setup](#application-setup)
-3. [Exchange Configuration](#exchange-configuration)
+2. [Tx-History CSV Import (MVP)](#tx-history-csv-import-mvp)
+3. [Application Setup](#application-setup)
 4. [Using the Application](#using-the-application)
 5. [Features Overview](#features-overview)
 6. [Troubleshooting](#troubleshooting)
@@ -12,13 +12,15 @@
 
 ## Getting Started
 
-The Crypto Trading Journal is a web-based application that helps you track, analyze, and improve your cryptocurrency trading performance. It connects to your exchange accounts via API to automatically import trade data and provides comprehensive analysis tools.
+The Crypto Trading Journal helps you track, analyze, and improve your cryptocurrency trading performance.
+
+Important: In the current MVP, importing is CSV‑based via Transaction/Order History (fills). Position History imports and API sync are removed.
 
 ### What You'll Need
 
 - Docker and Docker Compose installed on your system
-- API keys from your crypto exchange (currently supports Bitunix)
 - A web browser to access the application
+- CSV exports of your exchange order/transaction history (Bitunix/Blofin supported)
 
 ### Quick Start
 
@@ -31,14 +33,10 @@ The Crypto Trading Journal is a web-based application that helps you track, anal
    - Open your web browser
    - Navigate to `http://localhost:8501`
 
-3. **Configure Your Exchange**
-   - Go to the Config page
-   - Add your exchange API credentials
-   - Test the connection
-
-4. **Import Your Data**
-   - Click the refresh button to sync your trade data
-   - Wait for the import to complete
+3. **Import Your Data**
+   - Go to the Import Data page
+   - Upload your order/transaction history CSV (fills)
+   - Preview reconstructed positions and import closed trades
 
 5. **Start Analyzing**
    - View your trades in the Trade History page
@@ -90,37 +88,16 @@ docker-compose -f docker-compose.prod.yml up -d
 docker-compose -f docker-compose.prod.yml ps
 ```
 
-## Exchange Configuration
+## Tx-History CSV Import (MVP)
 
-### Bitunix API Setup
+See docs/tx_history_import.md for a detailed walkthrough.
 
-1. **Create API Keys**
-   - Log into your Bitunix account
-   - Navigate to API Management
-   - Create a new API key with read permissions
-   - Copy the API key (you won't be able to see it again)
-
-2. **Configure in Application**
-   - Go to the Config page in the application
-   - Find the Bitunix section
-   - Enter your API key
-   - Click "Test Connection" to verify
-   - Save the configuration
-
-### API Key Security
-
-- **Read-Only Permissions**: Only grant read permissions to API keys
-- **IP Restrictions**: Configure IP restrictions on your exchange if possible
-- **Regular Rotation**: Rotate API keys periodically for security
-- **Secure Storage**: The application encrypts API keys before storing them
-
-### Supported Exchanges
-
-Currently supported:
-- **Bitunix**: Full support for position history and trade data
-
-Coming soon:
-- Additional exchanges will be added based on user demand
+At a glance:
+- Supported: Bitunix futures-history CSV (fills), Blofin order history CSV (fills).
+- Auto-detection by headers; optional Account Label.
+- Preview modes: Raw Fills vs Reconstructed Positions; risk breach highlighting when configured.
+- Persist only fully closed positions; in-progress are preview-only.
+- Audit log per import and incremental window suggestion.
 
 ## Using the Application
 
@@ -133,12 +110,11 @@ The application has four main pages accessible from the sidebar:
 3. **Confluence Analysis**: Study the effectiveness of your trading setups
 4. **Config**: Manage exchange connections and custom fields
 
-### Data Synchronization
+### Importing CSVs
 
-- **Automatic Sync**: The application can automatically sync data on startup
-- **Manual Sync**: Use the refresh button to manually sync data
-- **Incremental Updates**: Only new and changed data is downloaded
-- **Status Indicators**: Check sync status and last update time
+- Use the Import Data page to upload order/transaction history CSVs.
+- Optionally set an Account Label and a time filter.
+- Review the preview, then import to persist closed trades.
 
 ## Features Overview
 
